@@ -1,0 +1,95 @@
+// Атомарная JSON-персистентность без внешних зависимостей.
+import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { freshDb, migrate } from './model.mjs';
+import { id, now } from './util.mjs';
+
+export class Store {
+	constructor(dir = './data') {
+		this.dir = resolve(dir);
+		this.file = join(this.dir, 'db.json');
+		this.db = freshDb();
+		this.dirty = false;
+		this.timer = null;
+		this.chain = Promise.resolve();
+		this.auditLimit = Math.max(1000, Number(process.env.AUDIT_LIMIT || 20000));
+	}
+
+	async load() {
+		await mkdir(this.dir, { recursive: true });
+		if (!existsSync(this.file)) {
+			this.db = freshDb();
+			return this.db;
+		}
+		try {
+			this.db = migrate(JSON.parse(await readFile(this.file, 'utf8')));
+		} catch (error) {
+			throw new Error(`Не удалось прочитать базу (отказ от перезаписи): ${error.message}`);
+		}
+		return this.db;
+	}
+
+	schedule(delay = 60) {
+		this.dirty = true;
+		clearTimeout(this.timer);
+		this.timer = setTimeout(() => {
+			this.flush().catch((error) => console.error('DB write failed:', error));
+		}, delay);
+		this.timer.unref?.();
+	}
+
+	async flush() {
+		clearTimeout(this.timer);
+		this.timer = null;
+		if (!this.dirty) return this.chain;
+		this.dirty = false;
+		const snapshot = JSON.stringify(this.db);
+		this.chain = this.chain.then(() => this.write(snapshot));
+		await this.chain;
+		if (this.dirty) return this.flush();
+		return this.chain;
+	}
+
+	async write(data) {
+		await mkdir(this.dir, { recursive: true });
+		const tmp = join(this.dir, `.db-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
+		let handle;
+		try {
+			handle = await open(tmp, 'wx', 0o600);
+			await handle.writeFile(data, 'utf8');
+			await handle.sync();
+			await handle.close();
+			handle = null;
+			await rename(tmp, this.file);
+			const dir = await open(this.dir, 'r');
+			try {
+				await dir.sync();
+			} finally {
+				await dir.close();
+			}
+		} catch (error) {
+			if (handle) await handle.close().catch(() => {});
+			await unlink(tmp).catch(() => {});
+			throw error;
+		}
+	}
+
+	audit(actor, action, entityType, entityId, metadata = {}) {
+		this.db.audit.push({
+			id: id('aud'),
+			actorId: actor?.id || null,
+			actorNick: actor?.nick || 'system',
+			action,
+			entityType,
+			entityId,
+			metadata,
+			at: now()
+		});
+		if (this.db.audit.length > this.auditLimit) {
+			this.db.audit.splice(0, this.db.audit.length - this.auditLimit);
+		}
+		this.schedule();
+	}
+}
