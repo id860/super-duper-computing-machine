@@ -2,52 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-
-const port=3900+Math.floor(Math.random()*500),base=`http://127.0.0.1:${port}`;
-let child,dataDir;
-const owner={cookie:'',csrf:''},admin={cookie:'',csrf:''};
-function start(){child=spawn(process.execPath,['server-v2.mjs'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),DATA_DIR:dataDir,ADMIN_NICK:'V2Admin',ADMIN_PASSWORD:'test-admin-password-123',AUTO_ARCHIVE_DAYS:'90'},stdio:'ignore'})}
-async function stop(){if(!child)return;child.kill('SIGTERM');await once(child,'exit');child=null}
-async function wait(){for(let i=0;i<80;i++){try{if((await fetch(base+'/api/worlds')).ok)return}catch{}await new Promise(r=>setTimeout(r,50))}throw Error('server-v2 did not start')}
-async function request(path,options={},client=owner){let method=options.method||'GET',headers={'content-type':'application/json',...(client.cookie?{cookie:client.cookie}:{}),...(options.headers||{})};if(!['GET','HEAD'].includes(method)&&options.origin!==false)headers.origin=base;if(options.csrf)headers['x-csrf-token']=client.csrf;let response=await fetch(base+path,{...options,method,headers});let setCookie=response.headers.get('set-cookie');if(setCookie)client.cookie=setCookie.split(';')[0];let data=await response.json();if(data.csrfToken)client.csrf=data.csrfToken;return{response,data}}
-
-test.before(async()=>{dataDir=await mkdtemp(join(tmpdir(),'pixelfront-v2-'));start();await wait()});
-test.after(async()=>{await stop();await rm(dataDir,{recursive:true,force:true})});
-
-test('security headers, frontend-compatible origin checks and persistent sessions',async()=>{
-  let r=await request('/api/worlds');
-  assert.equal(r.response.headers.get('x-content-type-options'),'nosniff');
-  assert.match(r.response.headers.get('content-security-policy'),/script-src 'self' 'unsafe-inline'/);
-  r=await request('/api/auth/register',{method:'POST',body:JSON.stringify({nick:'OwnerV2',password:'owner-password-123'})});
-  assert.equal(r.response.status,201);assert.ok(owner.cookie);assert.ok(owner.csrf);
-  r=await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'V2 world',width:32,height:24,cooldownMs:250,maxEnergy:100})});
-  assert.equal(r.response.status,201);
-  await stop();start();await wait();
-  r=await request('/api/me');assert.equal(r.data.user.nick,'OwnerV2');
-  r=await request('/api/worlds',{method:'POST',origin:false,body:JSON.stringify({name:'blocked'})});assert.equal(r.response.status,403);
-  r=await request('/api/worlds',{method:'POST',origin:false,csrf:true,body:JSON.stringify({name:'CSRF world'})});assert.equal(r.response.status,201);
-});
-
-test('community settings, pixel history, rollback, quests alias and archive work',async()=>{
-  let r=await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'History world',width:32,height:24,cooldownMs:250,maxEnergy:100})}),wid=r.data.world.id;
-  r=await request(`/api/worlds/${wid}`,{method:'PATCH',body:JSON.stringify({name:'Renamed world',description:'updated',public:true})});assert.equal(r.response.status,200);assert.equal(r.data.world.name,'Renamed world');
-  await request(`/api/worlds/${wid}/pixel`,{method:'POST',body:JSON.stringify({x:2,y:3,color:'#2783de'})});
-  r=await request(`/api/worlds/${wid}/pixel-history?x=2&y=3`);assert.equal(r.response.status,200);assert.equal(r.data.history[0].type,'place');
-  r=await request(`/api/worlds/${wid}/rollback`,{method:'POST',body:JSON.stringify({historyId:r.data.history[0].id})});assert.equal(r.response.status,200);assert.equal(r.data.pixel,null);
-  for(let i=0;i<5;i++)await request(`/api/worlds/${wid}/pixel`,{method:'POST',body:JSON.stringify({x:i,y:4,color:'#46a171'})});
-  r=await request('/api/quests');assert.equal(r.response.status,200);assert.equal(r.data.daily.quests.find(q=>q.id==='pixels_5').progress,5);
-  r=await request('/api/quests/daily/pixels_5/claim',{method:'POST',body:'{}'});assert.equal(r.response.status,200);assert.equal(r.data.inventory.coins,25);
-  r=await request(`/api/worlds/${wid}/archive`,{method:'POST',body:JSON.stringify({reason:'test'})});assert.equal(r.response.status,200);assert.ok(r.data.world.archivedAt);
-});
-
-test('admin report queue, PATCH resolve alias and audit log work',async()=>{
-  let worlds=await request('/api/worlds'),wid=worlds.data.worlds.find(w=>w.type==='community').id;
-  let r=await request('/api/reports',{method:'POST',body:JSON.stringify({worldId:wid,reason:'integration test'})}),rid=r.data.report.id;assert.equal(r.response.status,201);
-  r=await request('/api/auth/login',{method:'POST',body:JSON.stringify({nick:'V2Admin',password:'test-admin-password-123'})},admin);assert.equal(r.response.status,200);
-  r=await request('/api/admin/reports',{},admin);assert.ok(r.data.reports.some(x=>x.id===rid));
-  r=await request(`/api/admin/reports/${rid}`,{method:'PATCH',body:JSON.stringify({resolution:'checked',status:'resolved'})},admin);assert.equal(r.response.status,200);assert.equal(r.data.report.status,'resolved');
-  r=await request('/api/admin/audit',{},admin);assert.ok(r.data.audit.some(x=>x.action==='report.resolve'));
-});
+const port=3900+Math.floor(Math.random()*400),base=`http://127.0.0.1:${port}`;let child,dataDir;const owner={cookie:'',csrf:''},other={cookie:'',csrf:''},admin={cookie:'',csrf:''};
+function start(extra={}){child=spawn(process.execPath,['server-v2.mjs'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),DATA_DIR:dataDir,ADMIN_NICK:'V2Admin',ADMIN_PASSWORD:'test-admin-password-123',APP_ORIGIN:base,...extra},stdio:'ignore'})}async function stop(){if(!child)return;child.kill('SIGTERM');await once(child,'exit');child=null}async function wait(){for(let i=0;i<100;i++){try{if((await fetch(base+'/api/worlds')).ok)return}catch{}await new Promise(r=>setTimeout(r,40))}throw Error('server-v2 did not start')}
+async function request(path,options={},client=owner){let method=(options.method||'GET').toUpperCase(),headers={'content-type':'application/json',...(client.cookie?{cookie:client.cookie}:{}),...(options.headers||{})};if(!['GET','HEAD'].includes(method)&&options.origin!==false)headers.origin=options.origin||base;if(options.csrf!==false&&client.csrf&&!['GET','HEAD'].includes(method))headers['x-csrf-token']=client.csrf;let response=await fetch(base+path,{...options,method,headers}),setCookie=response.headers.get('set-cookie');if(setCookie&&options.captureCookie!==false)client.cookie=setCookie.split(';')[0];let data=await response.json().catch(()=>({}));if(data.csrfToken)client.csrf=data.csrfToken;return{response,data,setCookie}}const register=(client,nick)=>request('/api/auth/register',{method:'POST',body:JSON.stringify({nick,password:'safe-password-123'})},client);
+test.before(async()=>{dataDir=await mkdtemp(join(tmpdir(),'pixelfront-v2-'));start();await wait();assert.equal((await register(owner,'OwnerV2')).response.status,201);assert.equal((await register(other,'OtherV2')).response.status,201);assert.equal((await request('/api/auth/login',{method:'POST',body:JSON.stringify({nick:'V2Admin',password:'test-admin-password-123'})},admin)).response.status,200)});test.after(async()=>{await stop();await rm(dataDir,{recursive:true,force:true})});
+test('security headers and traversal defenses are active',async()=>{let r=await request('/');assert.equal(r.response.headers.get('x-content-type-options'),'nosniff');assert.equal(r.response.headers.get('x-frame-options'),'DENY');assert.equal(r.response.headers.get('cross-origin-opener-policy'),'same-origin');assert.match(r.response.headers.get('content-security-policy'),/object-src 'none'/);r=await request('/..%2Fserver-v2.mjs');assert.ok([400,403,404].includes(r.response.status));r=await request('/%2e%2e/%2e%2e/etc/passwd');assert.ok([400,403,404].includes(r.response.status));r=await request('/api/worlds/%E0%A4%A');assert.equal(r.response.status,400)});
+test('CSRF is required and hostile origins are rejected',async()=>{let r=await request('/api/worlds',{method:'POST',csrf:false,body:JSON.stringify({name:'blocked'})},owner);assert.equal(r.response.status,403);r=await request('/api/worlds',{method:'POST',origin:'https://evil.example',body:JSON.stringify({name:'blocked'})},owner);assert.equal(r.response.status,403);r=await request('/api/worlds',{method:'POST',origin:false,body:JSON.stringify({name:'token client'})},owner);assert.equal(r.response.status,201);let anonymous={cookie:'',csrf:''};r=await request('/api/auth/login',{method:'POST',origin:false,body:JSON.stringify({nick:'OwnerV2',password:'safe-password-123'})},anonymous);assert.equal(r.response.status,403)});
+test('logout revokes the exact server-side session',async()=>{let client={cookie:'',csrf:''};await request('/api/auth/login',{method:'POST',body:JSON.stringify({nick:'OwnerV2',password:'safe-password-123'})},client);let oldCookie=client.cookie,r=await request('/api/auth/logout',{method:'POST',body:'{}'},client);assert.equal(r.response.status,200);assert.match(r.setCookie,/Max-Age=0/);client.cookie=oldCookie;client.csrf='';let me=await request('/api/me',{},client);assert.equal(me.data.user,null)});
+test('world and admin authorization cannot be bypassed',async()=>{let r=await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'Owners only',public:true})},owner),wid=r.data.world.id;r=await request(`/api/worlds/${wid}`,{method:'PATCH',body:JSON.stringify({name:'hijacked'})},other);assert.equal(r.response.status,403);r=await request(`/api/worlds/${wid}/arts`,{method:'POST',body:JSON.stringify({name:'bad',x:0,y:0,width:2,height:2})},other);assert.equal(r.response.status,403);r=await request(`/api/worlds/${wid}/archive`,{method:'POST',body:'{}'},other);assert.equal(r.response.status,403);r=await request('/api/admin/reports',{},other);assert.equal(r.response.status,403);r=await request('/api/admin/audit',{},owner);assert.equal(r.response.status,403);r=await request(`/api/worlds/${wid}`,{method:'PATCH',body:JSON.stringify({name:'admin edit'})},admin);assert.equal(r.response.status,200)});
+test('community pixels never affect official rating or official quests',async()=>{let r=await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'No rating',cooldownMs:250,maxEnergy:100})},owner),wid=r.data.world.id,before=(await request('/api/me',{},owner)).data.user;for(let i=0;i<5;i++)assert.equal((await request(`/api/worlds/${wid}/pixel`,{method:'POST',body:JSON.stringify({x:i,y:1,color:'#2783de'})},owner)).response.status,201);let after=(await request('/api/me',{},owner)).data.user;assert.equal(after.officialPixels,before.officialPixels);assert.equal(after.xp,before.xp);assert.equal(after.communityPixels,before.communityPixels+5);r=await request('/api/quests',{},owner);assert.equal(r.data.daily.quests.find(q=>q.id==='pixels_5').progress,0);await request('/api/worlds/official/pixel',{method:'POST',body:JSON.stringify({x:10,y:10,color:'#2783de'})},owner);let leaderboard=await request('/api/leaderboard');assert.equal(leaderboard.data.users.find(u=>u.id===after.id).officialPixels,before.officialPixels+1)});
+test('rollback detects stale pixels and route aliases match the UI',async()=>{let r=await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'History',cooldownMs:250,maxEnergy:100})},owner),wid=r.data.world.id;await request(`/api/worlds/${wid}/pixel`,{method:'POST',body:JSON.stringify({x:2,y:3,color:'#2783de'})},owner);r=await request(`/api/worlds/${wid}/pixels/history?x=2&y=3`,{},owner);let entry=r.data.history[0];await request(`/api/worlds/${wid}/pixel`,{method:'POST',body:JSON.stringify({x:2,y:3,color:'#46a171'})},owner);r=await request(`/api/worlds/${wid}/pixels/rollback`,{method:'POST',body:JSON.stringify({historyId:entry.id,expectedAt:entry.after.at})},owner);assert.equal(r.response.status,409);r=await request('/api/reports',{method:'POST',body:JSON.stringify({worldId:wid,reason:'test'})},owner);let rid=r.data.report.id;r=await request(`/api/admin/reports/${rid}`,{method:'PATCH',body:JSON.stringify({status:'resolved',resolution:'checked'})},admin);assert.equal(r.response.status,200)});
+test('feature flags are documented and server-authoritative',async()=>{let source=await readFile(new URL('../server-v2.mjs',import.meta.url),'utf8');assert.match(source,/FEATURE_REGISTRATION/);assert.match(source,/FEATURE_CHAT/);assert.match(source,/FEATURE_PIXELS/);let cfg=await request('/api/config');assert.deepEqual(cfg.data.features,{registration:true,chat:true,pixels:true})});
+test('atomic JSON survives restart and remains parseable',async()=>{await request('/api/worlds',{method:'POST',body:JSON.stringify({name:'Persisted'})},owner);await stop();let parsed=JSON.parse(await readFile(join(dataDir,'db.json'),'utf8'));assert.equal(parsed.version,3);assert.ok(Object.keys(parsed.worlds).length>=2);start();await wait();let me=await request('/api/me',{},owner);assert.equal(me.data.user.nick,'OwnerV2')});
