@@ -1,0 +1,13 @@
+services:
+  pixelfront:
+    build: .
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    environment:
+      PORT: 3000
+      DATA_DIR: /app/data
+      ADMIN_NICK: ${ADMIN_NICK:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-now}
+    volumes: ["pixelfront-data:/app/data"]
+volumes:
+  pixelfront-data:
