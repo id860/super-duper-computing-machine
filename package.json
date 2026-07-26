@@ -1,8 +1,12 @@
 {
   "name": "pixelfront-worlds",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "scripts": {"start":"node server.mjs","dev":"node --watch server.mjs","test":"node --test"},
-  "engines": {"node":">=20"}
+  "scripts": {
+    "start": "node server-v2.mjs",
+    "dev": "node --watch server-v2.mjs",
+    "test": "node --test"
+  },
+  "engines": {"node": ">=20"}
 }
