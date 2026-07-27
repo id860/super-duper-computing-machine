@@ -1,0 +1,23 @@
+name: Load
+on:
+  schedule:
+    # 03:20 UTC every day, outside the usual push traffic.
+    - cron: '20 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Chunk fan-out scenario
+        run: node --test test/load-chunks.test.mjs
+      - name: Chunk API and streaming contracts
+        run: node --test test/api-chunks.test.mjs test/chunks.test.mjs
+      - name: Health and metrics counters
+        run: node --test test/metrics.test.mjs
