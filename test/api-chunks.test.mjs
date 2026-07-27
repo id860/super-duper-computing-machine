@@ -21,6 +21,22 @@ async function request(path, opts = {}) {
 	return { res, data: await res.json() };
 }
 async function ready() { for (let i = 0; i < 100; i++) { try { if ((await fetch(BASE + '/api/config')).ok) return; } catch {} await new Promise((r) => setTimeout(r, 40)); } throw new Error('server not ready'); }
+async function pixelEventStream() {
+	const controller = new AbortController();
+	const res = await fetch(BASE + '/api/stream?world=official', { headers: { cookie: client.cookie }, signal: controller.signal });
+	assert.equal(res.status, 200);
+	const reader = res.body.getReader(), decoder = new TextDecoder();
+	const event = (async () => {
+		let text = '';
+		while (true) {
+			const { value, done } = await reader.read(); if (done) throw new Error('SSE ended before pixel event');
+			text += decoder.decode(value, { stream: true });
+			const match = /event: pixels\ndata: (.+)\n\n/.exec(text);
+			if (match) return JSON.parse(match[1]);
+		}
+	})();
+	return { event, close: () => controller.abort() };
+}
 
 test.before(async () => {
 	dataDir = await mkdtemp(join(tmpdir(), 'pixelfront-chunks-'));
@@ -40,6 +56,17 @@ test('infinite bootstrap omits full pixels and chunks return only requested cell
 	r = await request('/api/worlds/official/chunks?cx=0&cy=0&radius=0');
 	assert.equal(r.res.status, 200); assert.equal(r.data.chunkSize, 256);
 	assert.ok(r.data.chunks[0].cells.some(([x, y, c]) => x === 7 && y === 9 && c === '#e50000'));
+});
+
+test('SSE broadcasts authored pixels after the chunk index is warm', async () => {
+	const stream = await pixelEventStream();
+	try {
+		const r = await request('/api/worlds/official/ops', { method: 'POST', body: JSON.stringify({ tool: 'pixel', color: '#0083c7', cells: [[11, 13]] }) });
+		assert.equal(r.res.status, 200);
+		const event = await Promise.race([stream.event, new Promise((_, reject) => setTimeout(() => reject(new Error('SSE timeout')), 3000))]);
+		assert.equal(event.by, 'ChunkArtist');
+		assert.deepEqual(event.pixels, [[11, 13, '#0083c7']]);
+	} finally { stream.close(); }
 });
 
 test('mutating requests still require CSRF', async () => {
