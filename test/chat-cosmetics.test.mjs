@@ -17,6 +17,9 @@ test.after(async () => { child.kill('SIGTERM'); await once(child, 'exit'); await
 test('chat history and public lookup expose each author cosmetics', async () => {
 	let r = await request('/api/auth/register', { method: 'POST', body: JSON.stringify({ nick: 'ChatPainter', password: 'safe-password-123' }) });
 	assert.equal(r.res.status, 200);
+	// The official world lets members write in chat, so join before posting.
+	r = await request('/api/worlds/official/join', { method: 'POST', body: JSON.stringify({}) });
+	assert.equal(r.res.status, 200);
 	r = await request('/api/worlds/official/chat', { method: 'POST', body: JSON.stringify({ text: 'hello cosmetics' }) });
 	assert.equal(r.res.status, 200);
 	r = await request('/api/worlds/official/chat');
