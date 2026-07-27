@@ -89,6 +89,8 @@ export function createApi({ store, sse, notify }) {
 			ownerNick: db.users[world.ownerId]?.nick || null,
 			width: world.width,
 			height: world.height,
+			infinite: !!world.infinite,
+			spawn: world.spawn,
 			background: world.background,
 			grid: world.grid,
 			zoomMin: world.zoomMin,
