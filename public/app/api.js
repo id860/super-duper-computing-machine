@@ -1,93 +1,22 @@
 // Клиент API PixelFront Worlds: обёртка над fetch с автоматическим CSRF-токеном.
 const state = { csrf: null, me: null, config: null };
-
 async function request(path, { method = 'GET', body, headers = {} } = {}) {
 	const opts = { method, headers: { ...headers }, credentials: 'same-origin' };
-	if (body !== undefined) {
-		opts.headers['content-type'] = 'application/json';
-		opts.body = JSON.stringify(body);
-	}
+	if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
 	if (method !== 'GET' && state.csrf) opts.headers['x-csrf-token'] = state.csrf;
-	const res = await fetch(path, opts);
-	const csrf = res.headers.get('x-csrf-token');
-	if (csrf) state.csrf = csrf;
-	const text = await res.text();
-	let data = null;
-	if (text) {
-		try { data = JSON.parse(text); } catch { data = { raw: text }; }
-	}
-	if (!res.ok) {
-		const message = (data && (data.error || data.message)) || res.statusText || 'Ошибка запроса';
-		const err = new Error(message);
-		err.status = res.status;
-		err.data = data;
-		throw err;
-	}
+	const res = await fetch(path, opts), csrf = res.headers.get('x-csrf-token'); if (csrf) state.csrf = csrf;
+	const text = await res.text(); let data = null;
+	if (text) { try { data = JSON.parse(text); } catch { data = { raw: text }; } }
+	if (!res.ok) { const err = new Error((data && (data.error || data.message)) || res.statusText || 'Ошибка запроса'); err.status = res.status; err.data = data; throw err; }
 	return data;
 }
-
 const q = (v) => encodeURIComponent(v);
-
 export const api = {
-	state,
-	get: (p) => request(p),
-	post: (p, body) => request(p, { method: 'POST', body }),
-	patch: (p, body) => request(p, { method: 'PATCH', body }),
-	async loadConfig() {
-		const cfg = await request('/api/config');
-		state.config = cfg;
-		if (cfg.csrf) state.csrf = cfg.csrf;
-		state.me = cfg.me || null;
-		return cfg;
-	},
-	captcha: () => request('/api/captcha'),
-	async register(nick, password) { const r = await request('/api/auth/register', { method: 'POST', body: { nick, password } }); state.me = r.me; return r; },
-	async login(nick, password) { const r = await request('/api/auth/login', { method: 'POST', body: { nick, password } }); state.me = r.me; return r; },
-	async logout() { await request('/api/auth/logout', { method: 'POST' }); state.me = null; },
-	async me() { const r = await request('/api/me'); state.me = r.me; return r.me; },
-	stats: () => request('/api/me/stats'),
-	worlds: () => request('/api/worlds'),
-	world: (id) => request('/api/worlds/' + q(id)),
-	catalog: (category, search) => request('/api/catalog?category=' + q(category || 'popular') + (search ? '&q=' + q(search) : '')),
-	createWorld: (body) => request('/api/worlds', { method: 'POST', body }),
-	patchWorld: (id, body) => request('/api/worlds/' + q(id), { method: 'PATCH', body }),
-	join: (id, body) => request('/api/worlds/' + q(id) + '/join', { method: 'POST', body }),
-	ops: (id, body) => request('/api/worlds/' + q(id) + '/ops', { method: 'POST', body }),
-	energy: (id) => request('/api/worlds/' + q(id) + '/energy'),
-	chatGet: (id) => request('/api/worlds/' + q(id) + '/chat'),
-	chatPost: (id, text) => request('/api/worlds/' + q(id) + '/chat', { method: 'POST', body: { text } }),
-	createArt: (id, body) => request('/api/worlds/' + q(id) + '/arts', { method: 'POST', body }),
-	restoreArt: (id, artId) => request('/api/worlds/' + q(id) + '/arts/' + q(artId) + '/restore', { method: 'POST' }),
-	rollback: (id, body) => request('/api/worlds/' + q(id) + '/rollback', { method: 'POST', body }),
-	history: (id) => request('/api/worlds/' + q(id) + '/history'),
-	setMember: (id, userId, body) => request('/api/worlds/' + q(id) + '/members/' + q(userId), { method: 'POST', body }),
-	localLeaderboard: (id) => request('/api/worlds/' + q(id) + '/leaderboard'),
-	leaderboard: () => request('/api/leaderboard'),
-	shop: () => request('/api/shop'),
-	buy: (key) => request('/api/shop/' + q(key) + '/buy', { method: 'POST' }),
-	quests: () => request('/api/quests'),
-	claim: (questId) => request('/api/quests/' + q(questId) + '/claim', { method: 'POST' }),
-	events: () => request('/api/events'),
-	inventory: () => request('/api/inventory'),
-	report: (body) => request('/api/reports', { method: 'POST', body }),
-	endWorld: (id) => request('/api/worlds/' + q(id) + '/end', { method: 'POST' }),
-	restoreWorld: (id) => request('/api/worlds/' + q(id) + '/restore', { method: 'POST' }),
-	adminQueue: () => request('/api/admin/queue'),
-	resolveQueue: (id, resolution) => request('/api/admin/queue/' + q(id) + '/resolve', { method: 'POST', body: { resolution } }),
-	ban: (userId, body) => request('/api/admin/users/' + q(userId) + '/ban', { method: 'POST', body }),
-	setRole: (userId, role) => request('/api/admin/users/' + q(userId) + '/role', { method: 'POST', body: { role } }),
-	audit: () => request('/api/admin/audit'),
-	automation: () => request('/api/admin/automation'),
-	adminWorld: (id) => request('/api/admin/worlds/' + q(id)),
-	adminUsers: (search) => request('/api/admin/users' + (search ? '?q=' + q(search) : '')),
-	patchUser: (userId, body) => request('/api/admin/users/' + q(userId), { method: 'PATCH', body }),
-	// Информация об авторе пикселя по координатам
-	pixelInfo: (id, x, y) => request('/api/worlds/' + q(id) + '/pixel-info?x=' + x + '&y=' + y),
-	stream(worldId, handlers) {
-		const es = new EventSource('/api/stream?world=' + q(worldId));
-		for (const [event, fn] of Object.entries(handlers)) {
-			es.addEventListener(event, (e) => { let d = e.data; try { d = JSON.parse(e.data); } catch {} fn(d); });
-		}
-		return es;
-	}
+	state, get: (p) => request(p), post: (p, body) => request(p, { method: 'POST', body }), patch: (p, body) => request(p, { method: 'PATCH', body }),
+	async loadConfig() { const cfg = await request('/api/config'); state.config = cfg; if (cfg.csrf) state.csrf = cfg.csrf; state.me = cfg.me || null; return cfg; },
+	captcha: () => request('/api/captcha'), async register(nick, password) { const r = await request('/api/auth/register', { method: 'POST', body: { nick, password } }); state.me = r.me; return r; }, async login(nick, password) { const r = await request('/api/auth/login', { method: 'POST', body: { nick, password } }); state.me = r.me; return r; }, async logout() { await request('/api/auth/logout', { method: 'POST' }); state.me = null; }, async me() { const r = await request('/api/me'); state.me = r.me; return r.me; }, stats: () => request('/api/me/stats'),
+	worlds: () => request('/api/worlds'), world: (id) => request('/api/worlds/' + q(id) + '?viewport=1'), catalog: (category, search) => request('/api/catalog?category=' + q(category || 'popular') + (search ? '&q=' + q(search) : '')),
+	createWorld: (body) => request('/api/worlds', { method: 'POST', body }), patchWorld: (id, body) => request('/api/worlds/' + q(id), { method: 'PATCH', body }), join: (id, body) => request('/api/worlds/' + q(id) + '/join', { method: 'POST', body }), ops: (id, body) => request('/api/worlds/' + q(id) + '/ops', { method: 'POST', body }), energy: (id) => request('/api/worlds/' + q(id) + '/energy'), chatGet: (id) => request('/api/worlds/' + q(id) + '/chat'), chatPost: (id, text) => request('/api/worlds/' + q(id) + '/chat', { method: 'POST', body: { text } }),
+	createArt: (id, body) => request('/api/worlds/' + q(id) + '/arts', { method: 'POST', body }), restoreArt: (id, artId) => request('/api/worlds/' + q(id) + '/arts/' + q(artId) + '/restore', { method: 'POST' }), rollback: (id, body) => request('/api/worlds/' + q(id) + '/rollback', { method: 'POST', body }), history: (id) => request('/api/worlds/' + q(id) + '/history'), setMember: (id, userId, body) => request('/api/worlds/' + q(id) + '/members/' + q(userId), { method: 'POST', body }), localLeaderboard: (id) => request('/api/worlds/' + q(id) + '/leaderboard'), leaderboard: () => request('/api/leaderboard'), shop: () => request('/api/shop'), buy: (key) => request('/api/shop/' + q(key) + '/buy', { method: 'POST' }), quests: () => request('/api/quests'), claim: (questId) => request('/api/quests/' + q(questId) + '/claim', { method: 'POST' }), events: () => request('/api/events'), inventory: () => request('/api/inventory'), report: (body) => request('/api/reports', { method: 'POST', body }), endWorld: (id) => request('/api/worlds/' + q(id) + '/end', { method: 'POST' }), restoreWorld: (id) => request('/api/worlds/' + q(id) + '/restore', { method: 'POST' }), adminQueue: () => request('/api/admin/queue'), resolveQueue: (id, resolution) => request('/api/admin/queue/' + q(id) + '/resolve', { method: 'POST', body: { resolution } }), ban: (userId, body) => request('/api/admin/users/' + q(userId) + '/ban', { method: 'POST', body }), setRole: (userId, role) => request('/api/admin/users/' + q(userId) + '/role', { method: 'POST', body: { role } }), audit: () => request('/api/admin/audit'), automation: () => request('/api/admin/automation'), adminWorld: (id) => request('/api/admin/worlds/' + q(id)), adminUsers: (search) => request('/api/admin/users' + (search ? '?q=' + q(search) : '')), patchUser: (userId, body) => request('/api/admin/users/' + q(userId), { method: 'PATCH', body }), pixelInfo: (id, x, y) => request('/api/worlds/' + q(id) + '/pixel-info?x=' + x + '&y=' + y),
+	stream(worldId, handlers) { const es = new EventSource('/api/stream?world=' + q(worldId)); for (const [event, fn] of Object.entries(handlers)) es.addEventListener(event, (e) => { let d = e.data; try { d = JSON.parse(e.data); } catch {} fn(d); }); return es; }
 };
