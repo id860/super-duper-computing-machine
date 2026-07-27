@@ -89,6 +89,9 @@ function decorateChat() {
 		const nick = (node.dataset.nick || node.textContent).replace(/:\s*$/, '').trim();
 		if (!nick) return;
 		node.dataset.nick = nick;
+		// Strip the colon straight away so the nickname never flickers between
+		// "nick:" and the decorated form while cosmetics are being fetched.
+		if (node.textContent !== nick) node.textContent = nick;
 		const active = chatCosmetics.get(nick);
 		if (!active) { if (!pendingLookups.has(nick)) lookupCosmetics(nick); return; }
 		decorateNode(node, active, nick);
