@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CHUNK_SIZE, toSql, worldChunkRows } from '../scripts/export-postgres.mjs';
+import { CHUNK_SIZE as RUNTIME_CHUNK_SIZE } from '../src/http/chunks.mjs';
 
-test('PostgreSQL exporter separates world metadata and 256-cell chunks', () => {
+test('exporter chunk size matches the runtime fine-chunk size', () => { assert.equal(CHUNK_SIZE, RUNTIME_CHUNK_SIZE); });
+
+test('PostgreSQL exporter separates world metadata and fine chunks', () => {
 	const db = { worlds: { official: { id: 'official', name: 'World', pixels: { '1:2': { c: '#e50000' }, [`${CHUNK_SIZE}:3`]: { c: '#0083c7' } } } } };
 	const rows = worldChunkRows(db);
 	assert.equal(rows.filter((row) => row.kind === 'world').length, 1);

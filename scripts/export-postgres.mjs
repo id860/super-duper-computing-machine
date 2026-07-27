@@ -1,8 +1,9 @@
-// Export the active JSON database into the future PostgreSQL world_chunks schema.
+// Export the active JSON database into the PostgreSQL world_chunks schema.
 // Usage: DATA_FILE=./data/db.json node scripts/export-postgres.mjs > import.sql
+// The chunk size mirrors the runtime fine-chunk size so exported rows line up with live reads.
 import { readFile } from 'node:fs/promises';
 
-export const CHUNK_SIZE = 256;
+export const CHUNK_SIZE = Number(process.env.EXPORT_CHUNK_SIZE || 86);
 const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
 const chunkKey = (x, y) => `${Math.floor(x / CHUNK_SIZE)}:${Math.floor(y / CHUNK_SIZE)}`;
 
