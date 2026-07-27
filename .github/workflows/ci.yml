@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Validate server modules
+      - name: Validate server and migration modules
         run: |
           node --check server-v3.mjs
           node --check src/http/api.mjs
@@ -25,8 +25,9 @@ jobs:
           node --check src/http/world-bootstrap.mjs
           node --check src/core/model.mjs
           node --check src/core/world-fixes.mjs
+          node --check scripts/export-postgres.mjs
       - name: Verify unit and live API contracts
-        run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs test/api-chunks.test.mjs
+        run: npm test
 
   docker:
     runs-on: ubuntu-latest
