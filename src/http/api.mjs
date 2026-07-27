@@ -302,7 +302,7 @@ export function createApi({ store, sse, notify }) {
 		const body = await readJson(req);
 		const tool = pick(TOOLS, body.tool, 'pixel');
 		const color = String(body.color || '');
-		if (tool !== 'eraser' && !world.palette.includes(color)) throw new HttpError(400, 'Цвет не в палитре мира');
+		if (!world.palette.includes(color)) throw new HttpError(400, 'Цвет не в палитре мира');
 		const cells = normalizeCells(body.cells, world);
 		if (!cells.length) throw new HttpError(400, 'Нет пикселей для установки');
 		const config = toolConfig(world, tool);
@@ -337,7 +337,7 @@ export function createApi({ store, sse, notify }) {
 		// Применяем пиксели.
 		const applied = [];
 		for (const [x, y] of cells) {
-			const c = tool === 'eraser' ? world.background : color;
+			const c = color;
 			recordPixel(world, x, y, c, user);
 			applied.push([x, y, c]);
 		}
@@ -347,7 +347,8 @@ export function createApi({ store, sse, notify }) {
 		touchWorld(world);
 
 		// Единый обработчик начислений.
-		const reward = awardPixels(user, world, cells.length, { colors: [color], area: cells.length, event: isOfficial(world) });
+		const spawnCells = isOfficial(world) ? cells.filter(([x, y]) => x < world.spawn && y < world.spawn).length : cells.length;
+		const reward = awardPixels(user, world, cells.length, { colors: [color], area: cells.length, event: isOfficial(world), spawn: spawnCells });
 		if (isOfficial(world)) trackEventProgress(db, user, cells.length);
 
 		emit(world.id, 'pixels', { tool, pixels: applied, by: user.nick });
@@ -651,6 +652,28 @@ export function createApi({ store, sse, notify }) {
 		store.schedule(0);
 		ok(res, { role: target.role });
 	});
+	on('GET', '/api/admin/worlds/:id', async (req, res, ctx, params) => {
+		requireStaff(ctx, 'admin');
+		const world = getWorld(params.id);
+		ok(res, { world: adminWorldView(world) });
+	});
+	on('GET', '/api/admin/users', async (req, res, ctx) => {
+		requireStaff(ctx);
+		const search = clean(new URL(req.url, 'http://localhost').searchParams.get('q') || '', 40).toLowerCase();
+		const all = Object.values(db.users);
+		const list = search ? all.filter((u) => u.nick.toLowerCase().includes(search) || u.id === search) : all.slice().sort((a, b) => (b.xp || 0) - (a.xp || 0));
+		ok(res, { users: list.slice(0, 50).map(adminUserView) });
+	});
+	on('PATCH', '/api/admin/users/:userId', async (req, res, ctx, params) => {
+		const staff = requireStaff(ctx, 'admin');
+		const target = db.users[params.userId];
+		if (!target) throw new HttpError(404, 'Игрок не найден');
+		const body = await readJson(req);
+		const changed = applyUserAdminPatch(target, body, staff);
+		store.audit(staff, 'user.patch', 'user', target.id, { fields: changed });
+		store.schedule(0);
+		ok(res, { user: adminUserView(target) });
+	});
 	on('GET', '/api/admin/audit', async (req, res, ctx) => {
 		requireStaff(ctx);
 		ok(res, { audit: db.audit.slice(-200).reverse() });
@@ -725,16 +748,21 @@ function verifyCaptcha(tokenValue, answer) {
 	return safeEqual(String(tokenValue), sha(`${String(answer).trim()}:${CAPTCHA_SECRET}`));
 }
 
+// Максимальная координата для бесконечных миров (эффективно безграничный холст).
+const INFINITE_MAX = 100000;
+
 function normalizeCells(cells, world) {
 	if (!Array.isArray(cells)) return [];
 	const seen = new Set();
 	const out = [];
+	const limX = world.infinite ? INFINITE_MAX : world.width;
+	const limY = world.infinite ? INFINITE_MAX : world.height;
 	for (const cell of cells.slice(0, 5000)) {
 		if (!Array.isArray(cell) || cell.length < 2) continue;
 		const x = Math.trunc(Number(cell[0]));
 		const y = Math.trunc(Number(cell[1]));
 		if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-		if (x < 0 || y < 0 || x >= world.width || y >= world.height) continue;
+		if (x < 0 || y < 0 || x >= limX || y >= limY) continue;
 		const key = `${x}:${y}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
@@ -846,21 +874,27 @@ function applyWorldSettings(world, body, user) {
 	const set = (key, value) => {
 		if (value !== undefined) world[key] = value;
 	};
+	// Официальный мир целиком редактирует только администратор; в мирах сообщества — владелец/админ.
+	const canRestricted = !isOfficial(world) || (user && user.role === 'admin');
 	if (typeof body.name === 'string') set('name', clean(body.name, 48) || world.name);
 	if (typeof body.description === 'string') set('description', clean(body.description, 240));
 	if (typeof body.icon === 'string') set('icon', clean(body.icon, 8) || world.icon);
 	if (Array.isArray(body.tags)) set('tags', body.tags.map((t) => clean(t, 20).toLowerCase()).filter(Boolean).slice(0, 8));
 	if (typeof body.grid === 'boolean') set('grid', body.grid);
 	if (typeof body.allowDownload === 'boolean') set('allowDownload', body.allowDownload);
+	if (typeof body.background === 'string' && /^#[0-9a-fA-F]{6}$/.test(body.background)) set('background', body.background.toLowerCase());
+	if (body.spawn !== undefined && canRestricted) set('spawn', int(body.spawn, 100, 100000, world.spawn));
+	if (body.zoomMin !== undefined) set('zoomMin', clamp(body.zoomMin, 0.1, 5, world.zoomMin || 0.5));
+	if (body.zoomMax !== undefined) set('zoomMax', int(body.zoomMax, 5, 200, world.zoomMax || 40));
 	if (Array.isArray(body.palette)) {
 		const palette = [...new Set(body.palette.filter((c) => PALETTE.includes(c)))];
 		if (palette.length) set('palette', palette);
 	}
-	if (body.access && typeof body.access === 'object' && !isOfficial(world)) {
+	if (body.access && typeof body.access === 'object' && canRestricted) {
 		if (typeof body.access.mode === 'string') world.access.mode = pick(ACCESS_MODES, body.access.mode, world.access.mode);
 		if (typeof body.access.password === 'string' && body.access.password) world.access.passwordHash = hashPassword(body.access.password);
 	}
-	if (body.energy && typeof body.energy === 'object' && !isOfficial(world)) {
+	if (body.energy && typeof body.energy === 'object' && canRestricted) {
 		const e = world.energy;
 		if (['cooldown', 'stock', 'infinite', 'off'].includes(body.energy.mode)) e.mode = body.energy.mode;
 		if (body.energy.cooldownMs !== undefined) e.cooldownMs = int(body.energy.cooldownMs, 200, 600000, e.cooldownMs);
@@ -868,7 +902,7 @@ function applyWorldSettings(world, body, user) {
 		if (body.energy.dailyLimit !== undefined) e.dailyLimit = int(body.energy.dailyLimit, 0, 1000000, e.dailyLimit);
 		if (body.energy.heatPenalty !== undefined) e.heatPenalty = !!body.energy.heatPenalty;
 	}
-	if (body.tools && typeof body.tools === 'object' && !isOfficial(world)) {
+	if (body.tools && typeof body.tools === 'object' && canRestricted) {
 		for (const [tool, patch] of Object.entries(body.tools)) {
 			if (!world.tools[tool] || !patch || typeof patch !== 'object') continue;
 			const t = world.tools[tool];
@@ -897,7 +931,52 @@ function applyWorldSettings(world, body, user) {
 		if (body.protection.requireApproval !== undefined) p.requireApproval = !!body.protection.requireApproval;
 		if (body.protection.unlimited !== undefined && world.access.mode === 'invite') p.unlimited = !!body.protection.unlimited;
 	}
-	if (typeof body.listed === 'boolean' && !isOfficial(world)) world.catalog.listed = body.listed;
+	if (typeof body.listed === 'boolean' && canRestricted) world.catalog.listed = body.listed;
+}
+
+function adminWorldView(world) {
+	return {
+		id: world.id, name: world.name, description: world.description, icon: world.icon,
+		type: world.type, tags: world.tags || [], background: world.background,
+		width: world.width, height: world.height, infinite: !!world.infinite, spawn: world.spawn,
+		zoomMin: world.zoomMin, zoomMax: world.zoomMax, grid: world.grid !== false, allowDownload: !!world.allowDownload,
+		palette: world.palette, listed: !!(world.catalog && world.catalog.listed),
+		access: { mode: world.access.mode },
+		energy: { ...world.energy },
+		tools: world.tools,
+		chat: { ...world.chat, bannedWords: world.chat.bannedWords || [] },
+		protection: { ...world.protection }
+	};
+}
+
+function adminUserView(user) {
+	return {
+		id: user.id, nick: user.nick, role: user.role, verified: !!user.verified,
+		level: user.level, xp: user.xp,
+		officialPixels: user.officialPixels, communityPixels: user.communityPixels,
+		coins: user.inventory.coins, worldSlots: user.worldSlots, worldsCreated: user.worldsCreated,
+		banned: !!user.ban, ban: user.ban || null, mutedUntil: user.mutedUntil || null,
+		achievements: (user.achievements || []).length, lastSeenAt: user.lastSeenAt || null
+	};
+}
+
+function applyUserAdminPatch(user, body, staff) {
+	const changed = [];
+	if (body.role !== undefined) { user.role = pick(['user', 'moderator', 'admin'], body.role, user.role); changed.push('role'); }
+	if (body.verified !== undefined) { user.verified = !!body.verified; changed.push('verified'); }
+	if (body.level !== undefined) { user.level = int(body.level, 0, 999, user.level); changed.push('level'); }
+	if (body.xp !== undefined) { user.xp = int(body.xp, 0, 1e9, user.xp); changed.push('xp'); }
+	if (body.officialPixels !== undefined) { user.officialPixels = int(body.officialPixels, 0, 1e9, user.officialPixels); changed.push('officialPixels'); }
+	if (body.communityPixels !== undefined) { user.communityPixels = int(body.communityPixels, 0, 1e9, user.communityPixels); changed.push('communityPixels'); }
+	if (body.coins !== undefined) { user.inventory.coins = int(body.coins, 0, 1e9, user.inventory.coins); changed.push('coins'); }
+	if (body.worldSlots !== undefined) { user.worldSlots = int(body.worldSlots, 0, 1000, user.worldSlots); changed.push('worldSlots'); }
+	if (body.mutedUntil !== undefined) { user.mutedUntil = body.mutedUntil ? now() + int(body.mutedUntil, 0, 3650 * 86400000, 0) : null; changed.push('mutedUntil'); }
+	if (body.ban !== undefined) {
+		if (!body.ban) user.ban = null;
+		else user.ban = { reason: clean(body.ban.reason, 200), until: body.ban.durationMs ? now() + int(body.ban.durationMs, 60000, 3650 * 86400000, 86400000) : null, by: staff.id, at: now() };
+		changed.push('ban');
+	}
+	return changed;
 }
 
 // -------- маршрутизация --------
