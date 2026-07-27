@@ -23,7 +23,9 @@ jobs:
           node --check src/http/metrics.mjs
           node --check src/http/world-bootstrap.mjs
           node --check src/http/player-preferences.mjs
+          node --check src/core/db.mjs
           node --check src/core/model.mjs
+          node --check src/core/progress.mjs
           node --check src/core/world-fixes.mjs
           node --check src/core/postgres-mirror.mjs
           node --check src/core/redis-runtime.mjs
