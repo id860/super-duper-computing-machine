@@ -26,6 +26,8 @@ jobs:
           node --check src/core/model.mjs
           node --check src/core/world-fixes.mjs
           node --check scripts/export-postgres.mjs
+          node --check public/app/interaction-patch.js
+          node --check public/app/viewport-cache.js
       - name: Verify unit and live API contracts
         run: npm test
 

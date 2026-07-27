@@ -25,4 +25,6 @@ jobs:
       - run: node --check src/core/model.mjs
       - run: node --check src/core/world-fixes.mjs
       - run: node --check scripts/export-postgres.mjs
+      - run: node --check public/app/interaction-patch.js
+      - run: node --check public/app/viewport-cache.js
       - run: npm test
