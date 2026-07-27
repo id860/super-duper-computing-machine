@@ -1,27 +1,59 @@
-/* Styles for the extended cosmetics catalogue. Kept in its own sheet so the
-   wardrobe can grow without touching the core experience styles. */
+/* Cosmetics: nick styles, frames and standalone marks.
+   Marks (badge / trail / cursor) are real elements placed before the nickname,
+   so several slots can be worn at once and nothing overlaps the message text. */
 
-.chat-nick.cosmetic-nick_ice { color: #38bdf8; text-shadow: 0 0 6px rgba(56, 189, 248, .45); }
-.chat-nick.cosmetic-nick_mint { color: #34d399; }
+.chat-nick { font-weight: 600; }
+
+/* ---- nick slot ---- */
 .chat-nick.cosmetic-nick_gradient { background: linear-gradient(90deg, #6366f1, #ec4899); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.chat-nick.cosmetic-nick_gold { color: #d4a017; text-shadow: 0 0 6px rgba(212, 160, 23, .35); }
+.chat-nick.cosmetic-nick_gold { color: #b45309; text-shadow: 0 0 6px rgba(251, 191, 36, .45); }
+.chat-nick.cosmetic-nick_ice { color: #0ea5e9; text-shadow: 0 0 6px rgba(125, 211, 252, .5); }
+.chat-nick.cosmetic-nick_mint { color: #10b981; }
 
-.chat-nick[data-badge='badge_architect']::after { content: '\25e9'; margin-left: 4px; color: #6366f1; }
-.chat-nick[data-badge='badge_guardian']::after { content: '\26e8'; margin-left: 4px; color: #0ea5e9; }
+/* ---- frame slot ---- */
+.chat-msg[data-cosmetic-frame] { border-radius: 8px; }
+.chat-msg[data-cosmetic-frame="frame_neon"], .me[data-cosmetic-frame="frame_neon"] { box-shadow: inset 0 0 0 1px rgba(99, 102, 241, .55); }
+.chat-msg[data-cosmetic-frame="frame_aurora"], .me[data-cosmetic-frame="frame_aurora"] { box-shadow: inset 0 0 0 1px rgba(16, 185, 129, .5); background: linear-gradient(90deg, rgba(16,185,129,.08), rgba(59,130,246,.08)); }
+.chat-msg[data-cosmetic-frame="frame_forest"], .me[data-cosmetic-frame="frame_forest"] { box-shadow: inset 0 0 0 1px rgba(21, 128, 61, .5); }
+.chat-msg[data-cosmetic-frame="frame_crimson"], .me[data-cosmetic-frame="frame_crimson"] { box-shadow: inset 0 0 0 1px rgba(220, 38, 38, .5); }
+.me[data-cosmetic-frame] { border-radius: 8px; padding: 2px 6px; }
 
-.chat-nick[data-trail='trail_rainbow']::before { content: '\223f'; margin-right: 4px; background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #3b82f6); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.chat-nick[data-trail='trail_ember']::before { content: '\25cf'; margin-right: 4px; color: #f97316; }
+/* ---- marks: badge, trail, cursor ---- */
+.chat-mark { display: inline-block; margin-right: 6px; font-size: 12px; line-height: 1; vertical-align: baseline; }
+.chat-mark::before { content: attr(data-fallback); }
 
-.chat-nick[data-cursor='cursor_pixel']::before { content: '\25a0'; margin-right: 4px; color: var(--accent, #2563eb); font-size: 9px; }
-.chat-nick[data-cursor='cursor_halo']::before { content: '\25cb'; margin-right: 4px; color: #a855f7; }
+.chat-mark[data-mark="badge_pioneer"] { color: #6366f1; }
+.chat-mark[data-mark="badge_pioneer"]::before { content: '\2726'; }
+.chat-mark[data-mark="badge_creator"] { color: #ec4899; }
+.chat-mark[data-mark="badge_creator"]::before { content: '\2727'; }
+.chat-mark[data-mark="badge_architect"] { color: #0f766e; }
+.chat-mark[data-mark="badge_architect"]::before { content: '\25e9'; }
+.chat-mark[data-mark="badge_guardian"] { color: #b45309; }
+.chat-mark[data-mark="badge_guardian"]::before { content: '\26e8'; }
 
-.chat-msg[data-cosmetic-frame='frame_forest'] { border-left: 2px solid #22c55e; padding-left: 6px; }
-.chat-msg[data-cosmetic-frame='frame_crimson'] { border-left: 2px solid #dc2626; padding-left: 6px; }
+.chat-mark[data-mark="trail_spark"] { color: #f59e0b; }
+.chat-mark[data-mark="trail_spark"]::before { content: '\2733'; }
+.chat-mark[data-mark="trail_rainbow"] { color: #8b5cf6; }
+.chat-mark[data-mark="trail_rainbow"]::before { content: '\223f'; }
+.chat-mark[data-mark="trail_ember"] { color: #dc2626; }
+.chat-mark[data-mark="trail_ember"]::before { content: '\25cf'; }
 
-/* Wardrobe grid in the profile panel. */
-.wardrobe { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
-.wardrobe-item { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; background: var(--panel, #fff); text-align: left; cursor: pointer; }
-.wardrobe-item:hover { border-color: var(--accent, #2563eb); }
-.wardrobe-item[data-active='true'] { border-color: var(--accent, #2563eb); box-shadow: inset 0 0 0 1px var(--accent, #2563eb); }
-.wardrobe-slot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, #6b7280); }
-.wardrobe-preview { display: flex; align-items: center; gap: 6px; min-height: 20px; font-weight: 600; }
+.chat-mark[data-mark="cursor_comet"] { color: #0ea5e9; }
+.chat-mark[data-mark="cursor_comet"]::before { content: '\2604'; }
+.chat-mark[data-mark="cursor_pixel"] { color: #475569; }
+.chat-mark[data-mark="cursor_pixel"]::before { content: '\25a0'; }
+.chat-mark[data-mark="cursor_halo"] { color: #14b8a6; }
+.chat-mark[data-mark="cursor_halo"]::before { content: '\25cb'; }
+
+/* ---- wardrobe ---- */
+.wardrobe { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 8px 0 4px; }
+.wardrobe-item { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; padding: 8px; border: 1px solid #e5e7eb; border-radius: 10px; background: #fff; cursor: pointer; }
+.wardrobe-item:hover { border-color: #c7d2fe; }
+.wardrobe-item[data-active="true"] { border-color: #6366f1; box-shadow: 0 0 0 1px rgba(99, 102, 241, .35); background: #eef2ff; }
+.wardrobe-slot { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
+.wardrobe-preview { display: flex; align-items: center; padding: 4px 6px; border-radius: 8px; background: #f8fafc; }
+
+/* ---- events ---- */
+.event-details { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.link-btn { background: none; border: 0; padding: 0; margin-left: 8px; color: #4f46e5; cursor: pointer; font-size: 12px; }
+.profile-setting { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
