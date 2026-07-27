@@ -1,4 +1,7 @@
 // Canvas-движок PixelFront: рендер холста, зум к курсору, панорамирование, миникарта.
+// Оптимизировано: рендер только установленных пикселей (разреженно, с отсечением по
+// вьюпорту), rAF-коалесинг кадров и офскрин-буфер миникарты. Бесконечный холст с
+// центральной зоной спавна.
 export class PixelEngine {
 	constructor(canvas, minimap) {
 		this.canvas = canvas;
@@ -27,6 +30,13 @@ export class PixelEngine {
 		this.onOverlay = null;
 		this._pointers = new Map();
 		this._pinch = null;
+		this._raf = 0;
+		this._needsDraw = false;
+		this._mini = null;
+		this._miniDirty = true;
+		this._miniScale = 1;
+		this._miniOx = 0;
+		this._miniOy = 0;
 		this._bind();
 		this.resize();
 	}
@@ -38,6 +48,7 @@ export class PixelEngine {
 		this.showGrid = world.grid !== false;
 		this.pixels.clear();
 		for (const p of pixels || []) this.pixels.set(p[0] + ':' + p[1], p[2]);
+		this._miniDirty = true;
 		this.fit();
 	}
 
@@ -47,6 +58,7 @@ export class PixelEngine {
 			if (p[2] === this.world.background) this.pixels.delete(p[0] + ':' + p[1]);
 			else this.pixels.set(p[0] + ':' + p[1], p[2]);
 		}
+		this._miniDirty = true;
 		this.draw();
 	}
 
@@ -63,13 +75,16 @@ export class PixelEngine {
 		this.draw();
 	}
 
+	// Зона спавна для бесконечных миров (spawn×spawn), иначе фактический размер.
+	_spawn() { return this.world ? (this.world.spawn || this.world.width) : 0; }
+	_limX() { return this.world && this.world.infinite ? 100000 : (this.world ? this.world.width : 0); }
+	_limY() { return this.world && this.world.infinite ? 100000 : (this.world ? this.world.height : 0); }
+
 	fit() {
 		if (!this.world) return;
-		// Для бесконечных миров кадрируем по зоне спавна (spawn×spawn),
-		// иначе по фактическим размерам мира.
 		const inf = !!this.world.infinite;
-		const w = inf ? (this.world.spawn || this.world.width) : this.world.width;
-		const h = inf ? (this.world.spawn || this.world.height) : this.world.height;
+		const w = inf ? this._spawn() : this.world.width;
+		const h = inf ? this._spawn() : this.world.height;
 		const sx = this.viewW / w;
 		const sy = this.viewH / h;
 		this.scale = Math.max(this.minScale, Math.min(this.maxScale, Math.min(sx, sy) * 0.9));
@@ -109,67 +124,87 @@ export class PixelEngine {
 		this.zoomAt(factor, this.viewW / 2, this.viewH / 2);
 	}
 
+	// Планирует кадр через requestAnimationFrame — множественные вызовы за кадр
+	// схлопываются в одну отрисовку. Это убирает лаги при панорамировании.
 	draw() {
+		this._needsDraw = true;
+		if (this._raf) return;
+		this._raf = requestAnimationFrame(() => {
+			this._raf = 0;
+			if (this._needsDraw) { this._needsDraw = false; this._render(); }
+		});
+	}
+
+	_render() {
 		const ctx = this.ctx;
 		if (!ctx) return;
 		ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 		ctx.imageSmoothingEnabled = false;
-		ctx.fillStyle = '#0d0f14';
+		ctx.fillStyle = '#e9eaee';
 		ctx.fillRect(0, 0, this.viewW, this.viewH);
 		if (!this.world) return;
 		const inf = !!this.world.infinite;
 		const w = this.world.width, h = this.world.height;
-		const limX = inf ? 100000 : w;
-		const limY = inf ? 100000 : h;
 		const s = this.scale;
 		ctx.fillStyle = this.world.background || '#ffffff';
 		if (inf) ctx.fillRect(0, 0, this.viewW, this.viewH);
 		else ctx.fillRect(this.offsetX, this.offsetY, w * s, h * s);
-		const minX = Math.max(0, Math.floor((0 - this.offsetX) / s));
-		const minY = Math.max(0, Math.floor((0 - this.offsetY) / s));
-		const maxX = Math.min(limX - 1, Math.ceil((this.viewW - this.offsetX) / s));
-		const maxY = Math.min(limY - 1, Math.ceil((this.viewH - this.offsetY) / s));
-		for (let y = minY; y <= maxY; y++) {
-			for (let x = minX; x <= maxX; x++) {
-				const c = this.pixels.get(x + ':' + y);
-				if (!c) continue;
-				ctx.fillStyle = c;
-				ctx.fillRect(Math.floor(this.offsetX + x * s), Math.floor(this.offsetY + y * s), Math.ceil(s), Math.ceil(s));
-			}
+
+		const limX = this._limX(), limY = this._limY();
+		const cMinX = Math.max(0, Math.floor((0 - this.offsetX) / s));
+		const cMinY = Math.max(0, Math.floor((0 - this.offsetY) / s));
+		const cMaxX = Math.min(limX - 1, Math.ceil((this.viewW - this.offsetX) / s));
+		const cMaxY = Math.min(limY - 1, Math.ceil((this.viewH - this.offsetY) / s));
+
+		// Рендерим только реально установленные пиксели с отсечением по вьюпорту.
+		// O(число пикселей), а не O(площадь) — на порядки быстрее при отдалении.
+		const cell = Math.ceil(s);
+		let lastColor = null;
+		for (const [key, c] of this.pixels) {
+			const i = key.indexOf(':');
+			const x = +key.slice(0, i);
+			const y = +key.slice(i + 1);
+			if (x < cMinX || x > cMaxX || y < cMinY || y > cMaxY) continue;
+			if (c !== lastColor) { ctx.fillStyle = c; lastColor = c; }
+			ctx.fillRect(Math.floor(this.offsetX + x * s), Math.floor(this.offsetY + y * s), cell, cell);
 		}
+
 		if (this.showGrid && s >= 8) {
-			ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+			ctx.strokeStyle = 'rgba(0,0,0,0.10)';
 			ctx.lineWidth = 1;
 			ctx.beginPath();
-			for (let x = minX; x <= maxX + 1; x++) {
+			for (let x = cMinX; x <= cMaxX + 1; x++) {
 				const px = Math.floor(this.offsetX + x * s) + 0.5;
-				ctx.moveTo(px, this.offsetY + minY * s);
-				ctx.lineTo(px, this.offsetY + (maxY + 1) * s);
+				ctx.moveTo(px, this.offsetY + cMinY * s);
+				ctx.lineTo(px, this.offsetY + (cMaxY + 1) * s);
 			}
-			for (let y = minY; y <= maxY + 1; y++) {
+			for (let y = cMinY; y <= cMaxY + 1; y++) {
 				const py = Math.floor(this.offsetY + y * s) + 0.5;
-				ctx.moveTo(this.offsetX + minX * s, py);
-				ctx.lineTo(this.offsetX + (maxX + 1) * s, py);
+				ctx.moveTo(this.offsetX + cMinX * s, py);
+				ctx.lineTo(this.offsetX + (cMaxX + 1) * s, py);
 			}
 			ctx.stroke();
 		}
+
 		this._drawZone(ctx);
 		if (this.onOverlay) this.onOverlay(ctx);
+
 		if (this.hover && this.hover.x >= 0 && this.hover.y >= 0 && this.hover.x < limX && this.hover.y < limY) {
-			ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+			ctx.strokeStyle = 'rgba(20,22,28,0.85)';
 			ctx.lineWidth = Math.max(1, Math.min(3, s / 6));
 			ctx.strokeRect(this.offsetX + this.hover.x * s, this.offsetY + this.hover.y * s, s, s);
 		}
-		this._drawMinimap(minX, minY, maxX, maxY);
+
+		this._drawMinimap(cMinX, cMinY, cMaxX, cMaxY);
 	}
 
 	_drawZone(ctx) {
-		const sp = this.world && this.world.spawn;
+		const sp = this._spawn();
 		if (!sp || !this.world.infinite) return;
 		const s = this.scale;
 		const x0 = this.offsetX, y0 = this.offsetY, size = sp * s;
 		ctx.save();
-		ctx.strokeStyle = 'rgba(78,161,255,0.85)';
+		ctx.strokeStyle = 'rgba(37,99,235,0.9)';
 		ctx.lineWidth = 2;
 		ctx.setLineDash([6, 4]);
 		ctx.strokeRect(x0, y0, size, size);
@@ -179,32 +214,52 @@ export class PixelEngine {
 		const tw = Math.ceil(ctx.measureText(label).width);
 		const lx = Math.min(Math.max(x0 + 6, 6), this.viewW - tw - 12);
 		const ly = Math.min(Math.max(y0 + 18, 18), this.viewH - 8);
-		ctx.fillStyle = 'rgba(13,15,20,0.78)';
+		ctx.fillStyle = 'rgba(37,99,235,0.92)';
 		ctx.fillRect(lx - 5, ly - 13, tw + 10, 18);
-		ctx.fillStyle = '#e8ecf4';
+		ctx.fillStyle = '#ffffff';
 		ctx.textBaseline = 'alphabetic';
 		ctx.fillText(label, lx, ly);
 		ctx.restore();
 	}
 
-	_drawMinimap(minX, minY, maxX, maxY) {
+	// Офскрин-буфер миникарты пересобирается только при изменении пикселей,
+	// а не на каждом кадре панорамирования.
+	_rebuildMinimap() {
 		if (!this.mctx) return;
-		const mc = this.mctx, mw = this.minimap.width, mh = this.minimap.height;
-		mc.clearRect(0, 0, mw, mh);
-		const w = this.world.width, h = this.world.height;
+		const mw = this.minimap.width, mh = this.minimap.height;
+		if (!this._mini) this._mini = document.createElement('canvas');
+		this._mini.width = mw; this._mini.height = mh;
+		const b = this._mini.getContext('2d');
+		b.clearRect(0, 0, mw, mh);
+		const inf = !!this.world.infinite;
+		const w = inf ? this._spawn() : this.world.width;
+		const h = inf ? this._spawn() : this.world.height;
 		const s = Math.min(mw / w, mh / h);
-		const ox = (mw - w * s) / 2, oy = (mh - h * s) / 2;
-		mc.fillStyle = this.world.background || '#fff';
-		mc.fillRect(ox, oy, w * s, h * s);
+		this._miniScale = s;
+		this._miniOx = (mw - w * s) / 2;
+		this._miniOy = (mh - h * s) / 2;
+		b.fillStyle = this.world.background || '#fff';
+		b.fillRect(this._miniOx, this._miniOy, w * s, h * s);
 		for (const [key, c] of this.pixels) {
 			const i = key.indexOf(':');
 			const x = +key.slice(0, i), y = +key.slice(i + 1);
-			mc.fillStyle = c;
-			mc.fillRect(ox + x * s, oy + y * s, Math.max(1, s), Math.max(1, s));
+			if (x < 0 || y < 0 || x >= w || y >= h) continue;
+			b.fillStyle = c;
+			b.fillRect(this._miniOx + x * s, this._miniOy + y * s, Math.max(1, s), Math.max(1, s));
 		}
-		mc.strokeStyle = '#4ea1ff';
+		this._miniDirty = false;
+	}
+
+	_drawMinimap(cMinX, cMinY, cMaxX, cMaxY) {
+		if (!this.mctx) return;
+		if (this._miniDirty || !this._mini) this._rebuildMinimap();
+		const mc = this.mctx, mw = this.minimap.width, mh = this.minimap.height;
+		mc.clearRect(0, 0, mw, mh);
+		mc.drawImage(this._mini, 0, 0);
+		const s = this._miniScale, ox = this._miniOx, oy = this._miniOy;
+		mc.strokeStyle = '#2563eb';
 		mc.lineWidth = 1;
-		mc.strokeRect(ox + minX * s, oy + minY * s, (maxX - minX + 1) * s, (maxY - minY + 1) * s);
+		mc.strokeRect(ox + cMinX * s, oy + cMinY * s, (cMaxX - cMinX + 1) * s, (cMaxY - cMinY + 1) * s);
 	}
 
 	_emitView() {
