@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Store } from './src/core/db.mjs';
 import { createUser, officialWorld } from './src/core/model.mjs';
+import { normalizeWorldToolSettings } from './src/core/world-fixes.mjs';
 import { hashPassword, now } from './src/core/util.mjs';
 import { runAutomation } from './src/core/automation.mjs';
 import { createSse } from './src/http/sse.mjs';
@@ -19,6 +20,7 @@ const AUTOMATION_INTERVAL_MS = Number(process.env.AUTOMATION_INTERVAL_MS || 6000
 async function bootstrap() {
 	const store = new Store(DATA_DIR); await store.load(); const db = store.db;
 	if (!db.worlds.official) { db.worlds.official = officialWorld(); db.chats.official = db.chats.official || []; store.schedule(0); }
+	if (normalizeWorldToolSettings(db)) store.schedule(0);
 	const adminNick = process.env.ADMIN_NICK, adminPassword = process.env.ADMIN_PASSWORD;
 	if (adminNick && adminPassword) {
 		if (adminPassword.length < 12 || adminPassword.length > 128) console.warn('ADMIN_PASSWORD должен быть 12..128 символов, админ не создан.');
@@ -39,6 +41,7 @@ async function bootstrap() {
 				const ctx = { req, https, ip: (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'local').trim(), sid: sessionInfo?.sid || null, session: sessionInfo?.session || null, user: sessionInfo?.user || null };
 				if (await handleChunkRequest(req, res, ctx, db, chunkIndex)) return;
 				checkCsrf(req, ctx, APP_ORIGIN); const handled = await api.dispatch(req, res, ctx);
+				if (normalizeWorldToolSettings(db)) store.schedule();
 				if (!handled) fail(res, Object.assign(new Error('Метод не найден'), { status: 404 })); return;
 			}
 			if (req.method !== 'GET' && req.method !== 'HEAD') { fail(res, Object.assign(new Error('Метод не поддерживается'), { status: 405 })); return; }
