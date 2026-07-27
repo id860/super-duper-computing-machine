@@ -25,8 +25,6 @@ async function bootstrap() {
 		else { let admin = Object.values(db.users).find((u) => u.nick.toLowerCase() === adminNick.toLowerCase()); if (!admin) { admin = createUser({ nick: adminNick, password: hashPassword(adminPassword), role: 'admin', verified: true }); db.users[admin.id] = admin; console.log(`Создан администратор: ${adminNick}`); } else { admin.role = 'admin'; admin.password = hashPassword(adminPassword); } store.schedule(0); }
 	}
 	const sse = createSse(), chunkIndex = new ChunkIndex(db);
-	// Pixel broadcasts are emitted after the database mutation, making them a
-	// safe and cheap synchronization point for the in-memory chunk index.
 	const broadcast = sse.broadcast.bind(sse);
 	sse.broadcast = (worldId, event, data) => { if (event === 'pixels') chunkIndex.applyPixels(worldId, data?.pixels); return broadcast(worldId, event, data); };
 	const notify = (userId, message) => { const user = db.users[userId]; if (!user) return; (user.notifications ||= []).push({ id: `ntf_${now()}`, message, at: now(), read: false }); if (user.notifications.length > 50) user.notifications.splice(0, user.notifications.length - 50); };
@@ -48,7 +46,7 @@ async function bootstrap() {
 		} catch (error) { fail(res, error); }
 	});
 	server.listen(PORT, () => console.log(`PixelFront Worlds v3 → http://localhost:${PORT}`));
-	const shutdown = async (signal) => { console.log(`\n${signal}: завершение...`); clearInterval(automationTimer); sse.close(); server.close(); try { await store.flush(); } catch (error) { console.error(error); } process.exit(1); };
+	const shutdown = async (signal) => { console.log(`\n${signal}: завершение...`); clearInterval(automationTimer); sse.close(); server.close(); try { await store.flush(); } catch (error) { console.error(error); } process.exit(0); };
 	process.on('SIGINT', () => shutdown('SIGINT')); process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 bootstrap().catch((error) => { console.error('Фатальная ошибка запуска:', error); process.exit(1); });
