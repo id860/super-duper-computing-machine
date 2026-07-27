@@ -78,6 +78,9 @@ export const api = {
 	setRole: (userId, role) => request('/api/admin/users/' + q(userId) + '/role', { method: 'POST', body: { role } }),
 	audit: () => request('/api/admin/audit'),
 	automation: () => request('/api/admin/automation'),
+	adminWorld: (id) => request('/api/admin/worlds/' + q(id)),
+	adminUsers: (search) => request('/api/admin/users' + (search ? '?q=' + q(search) : '')),
+	patchUser: (userId, body) => request('/api/admin/users/' + q(userId), { method: 'PATCH', body }),
 	stream(worldId, handlers) {
 		const es = new EventSource('/api/stream?world=' + q(worldId));
 		for (const [event, fn] of Object.entries(handlers)) {
