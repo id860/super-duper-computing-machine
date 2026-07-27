@@ -1,135 +1,103 @@
 # API Reference — PixelFront Worlds v3
 
-Базовый URL: `/api`. Все мутирующие запросы требуют заголовка `x-csrf-token` (получается из `/api/config`).
+Base URL: `/api`. Mutating requests require the `x-csrf-token` header returned by `GET /api/config`.
 
-## Авторизация
+## Authentication
 
-### `POST /api/auth/register`
-Тело: `{ nick, password }`  
-Ответ: `201 { me }` или `409` (ник занят).
+| Method | Path | Body | Result |
+|---|---|---|---|
+| `POST` | `/auth/register` | `{ nick, password }` | `201 { me }` |
+| `POST` | `/auth/login` | `{ nick, password }` | `200 { me }` |
+| `POST` | `/auth/logout` | — | `200` |
+| `GET` | `/me` | — | current user |
+| `GET` | `/me/stats` | — | global and community statistics |
 
-### `POST /api/auth/login`
-Тело: `{ nick, password }`  
-Ответ: `200 { me }`.
+`GET /config` is the first request the client should make. It returns the CSRF token, the signed-in user (if any), palettes, tool list, presets and enabled features.
 
-### `POST /api/auth/logout`
-Ответ: `200 {}`. Сессия уничтожается, cookie обнуляется.
+## Worlds
 
-### `GET /api/me`
-Ответ: `200 { me }` — текущий пользователь или `null`.
+### `GET /worlds/:id`
 
-### `GET /api/me/stats`
-Ответ: `200 { global, community }` — детальная статистика.
+Returns `{ world, pixels, arts }`.
 
-## Конфигурация
+`world.infinite` identifies an unbounded world. Coordinates accepted by the current server range from `0` through `99,999` on both axes. `world.spawn` identifies the square spawn zone: for the official world this is `1000`, therefore its zone is `0…999 × 0…999`.
 
-### `GET /api/config`
-Ответ: `200 { features, csrf, me, presets, accessModes, … }`.  
-Всегда запрашивайте первым — задаёт CSRF-токен и состояние сессии.
+`pixels` is a compact array of `[x, y, color]` records. Pixel author metadata is intentionally loaded separately.
 
-### `GET /api/captcha`
-Ответ: `200 { question, captchaToken }`.
+### `GET /worlds/:id/pixels?since=<timestamp>`
 
-## Миры
+Returns pixels changed after the Unix-millisecond timestamp: `{ pixels, at }`.
 
-### `GET /api/worlds/:id`
-Ответ: `200 { world, pixels }`.  
-`world.infinite: boolean` — бесконечный холст.  
-`world.spawn: number` — размер зоны спавна (0…spawn-1).  
-`pixels`: массив `[x, y, color]` всех закрашенных клеток.
+### `GET /worlds/:id/pixel-info?x=<x>&y=<y>`
 
-### `POST /api/worlds`
-Тело: `{ name, description?, width?, height?, cooldownMs?, maxEnergy?, access? }`  
-Ответ: `201 { world }`.
+Returns metadata for a painted cell:
 
-### `PATCH /api/worlds/:id`
-Только владелец / модератор / администратор.  
-Тело: частичные поля мира.  
-Ответ: `200 { world }`.
+```json
+{ "x": 25, "y": 42, "color": "#e50000", "nick": "artist", "at": 1785140000000 }
+```
 
-### `POST /api/worlds/:id/ops`
-Рисование пикселей.  
-Тело: `{ tool, color, cells: [[x,y],…] }`  
-Инструменты: `pixel`, `brush2`, `brush3`, `line`, `rect`, `fill`, `picker`, `move`, `copy`, `stamp`, `template`, `protect`, `restore`.  
-Ответ: `201 { reward?, energy? }`.  
-Пиксели в зоне спавна официального мира дают двойной XP.
+For an unpainted cell the response is `{ "empty": true, "x": 25, "y": 42 }`.
 
-### `GET /api/worlds/:id/energy`
-Ответ: `200 { energy: { value, max, mode, cooldownMs } }`.
+### `POST /worlds`
 
-### `GET /api/worlds/:id/chat`
-Ответ: `200 { messages: [{ nick, text, at }] }`.
+Creates a community world. Body supports `{ name, description?, width?, height?, access?, preset?, palette? }`. Community-world activity remains separate from global progression.
 
-### `POST /api/worlds/:id/chat`
-Тело: `{ text }`  
-Ответ: `201 {}`.
+### `PATCH /worlds/:id`
 
-### `GET /api/worlds/:id/leaderboard`
-Ответ: `200 { local: [{ nick, pixels }] }`.
+Updates a world. Available to the owner, moderators or administrators; the official world is restricted to administrators.
 
-### `POST /api/worlds/:id/end`
-Архивировать мир (владелец / админ).  
-Ответ: `200 {}`.
+## Drawing
 
-## Рейтинг и прогрессия
+### `POST /worlds/:id/ops`
 
-### `GET /api/leaderboard`
-Глобальный рейтинг. Ответ: `200 { leaderboard: [{ nick, xp, level, officialPixels }] }`.
+Body:
 
-### `GET /api/quests`
-Ответ: `200 { daily: { quests: [{ id, title, progress, target, claimed }] } }`.
+```json
+{ "tool": "pixel", "color": "#0083c7", "cells": [[25, 42]] }
+```
 
-### `POST /api/quests/:id/claim`
-Ответ: `200 { reward }`.
+The server validates the active world palette, tool role, protected areas, energy, rate limits and coordinate range. Duplicate and out-of-range cells are ignored before application.
 
-### `GET /api/shop`
-Ответ: `200 { offers: [{ key, title, type, price }] }`.
+Tools: `pixel`, `brush2`, `brush3`, `line`, `rect`, `fill`, `picker`, `move`, `copy`, `stamp`, `template`, `protect`, `restore`.
 
-### `POST /api/shop/:key/buy`
-Ответ: `200 { ok }`.
+The result includes `{ applied, energy, reward }`. In the official world, cells in the spawn zone yield the enhanced XP reward.
 
-### `GET /api/events`
-Ответ: `200 { active: [{ key, title }] }`.
+### `GET /worlds/:id/energy`
 
-## Каталог
+Returns `{ energy: { value, max, mode, stepMs, spentToday } }`.
 
-### `GET /api/catalog?category=&q=`
-Ответ: `200 { worlds: […] }`.  
-Категории: `popular | new | growing | drawing | faction | games | events | protected`.
+## Realtime stream
 
-## SSE
+### `GET /stream?world=:id`
 
-### `GET /api/stream?world=:id`
-Подключается через `EventSource`.  
-События: `pixels` (новые/измененные пиксели), `chat` (новое сообщение), `lifecycle` (состояние мира), `reload` (полная перезагрузка).
+Connect using `EventSource`. Events are:
 
-## Администрирование
+- `pixels` — `{ tool, pixels: [[x,y,color]], by }`, where `by` is the author nickname;
+- `chat` — new chat message;
+- `lifecycle` — world state changed;
+- `reload` — client must reload the current world.
 
-Все `/api/admin/*` требуют роль `admin` или `moderator`.
+Clients should apply `pixels` events immediately and cache `by` together with the cell to avoid a metadata request on hover.
 
-### `GET /api/admin/worlds/:id`
-Полная конфигурация мира (включая `energy`, `tools`, `chat`, `infinite`, `spawn`).
+## Other endpoints
 
-### `PATCH /api/admin/worlds/:id`
-Обновление любых полей мира. Ответ: `200 { world }`.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` / `POST` | `/worlds/:id/chat` | world chat |
+| `GET` | `/worlds/:id/leaderboard` | local leaderboard |
+| `POST` | `/worlds/:id/end` | archive a community world |
+| `GET` | `/leaderboard` | global ranking |
+| `GET` | `/quests` | daily quests |
+| `POST` | `/quests/:id/claim` | claim quest reward |
+| `GET` | `/shop` | shop offers |
+| `POST` | `/shop/:key/buy` | buy an item |
+| `GET` | `/events` | active events |
+| `GET` | `/catalog?category=&q=` | community-world catalogue |
 
-### `GET /api/admin/users?q=`
-Поиск пользователей. Ответ: `200 { users: […] }`.
+## Administration
 
-### `PATCH /api/admin/users/:id`
-Тело: `{ role?, level?, xp?, coins?, officialPixels?, communityPixels?, worldSlots?, verified?, ban? }`.  
-Ответ: `200 { user }`.
+All `/admin/*` routes require staff privileges. Administrators can load and update world settings, search and change players, and resolve moderation queue items.
 
-### `GET /api/admin/queue`
-Очередь модерации. Ответ: `200 { queue: [{ id, type, priority, details }] }`.
+## Errors
 
-### `POST /api/admin/queue/:id/resolve`
-Тело: `{ resolution }`. Ответ: `200 {}`.
-
-### `GET /api/admin/automation`
-Состояние автоматики: последний тик, статистика.
-
-## Ошибки
-
-Формат: `{ error: string }`.  
-HTTP-статусы: `400` (невалидный запрос), `401` (не авторизован), `403` (нет прав / CSRF), `404` (не найдено), `409` (конфликт), `429` (rate limit), `500` (внутренняя ошибка).
+Errors use `{ "error": "message" }`. Typical statuses: `400` invalid input, `401` unauthenticated, `403` access/CSRF failure, `404` missing resource, `409` state conflict and `429` rate limit.
