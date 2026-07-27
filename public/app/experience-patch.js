@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { el, modal, toast } from './ui.js';
 
 const FINE_CHUNK_SIZE = 86;
+const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
 const originalSetWorld = PixelEngine.prototype.setWorld;
 PixelEngine.prototype.setWorld = function (...args) {
 	originalSetWorld.apply(this, args); window.__pixelEngine = this; this.showSpawnZone = localStorage.getItem('pf.hideSpawnZone') !== '1';
@@ -25,8 +26,59 @@ PixelEngine.prototype._drawZone = function (ctx) { const sp = this._spawn(); if 
 const cosmetics = [
 	['frame_neon', 'Неоновая рамка', 'frame'], ['frame_aurora', 'Рамка «Аврора»', 'frame'], ['nick_gradient', 'Градиентный ник', 'nick'], ['nick_gold', 'Золотой ник', 'nick'], ['badge_pioneer', 'Значок пионера', 'badge'], ['badge_creator', 'Значок творца', 'badge'], ['trail_spark', 'Искристый след', 'trail'], ['cursor_comet', 'Курсор-комета', 'cursor']
 ];
-function applyCosmetics(active = {}) { for (const slot of ['frame', 'nick', 'badge', 'trail', 'cursor']) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || ''; decorateOwnChat(active); }
-function decorateOwnChat(active = {}) { const nick = api.state.me?.nick; if (!nick) return; document.querySelectorAll('.chat-nick').forEach((node) => { if (!node.textContent.startsWith(nick + ':')) return; node.className = `chat-nick cosmetic-${active.nick || ''}`; if (active.badge) node.dataset.badge = active.badge; }); }
+
+// ---------- Cosmetics in chat (every author, not only the current player) ----------
+const chatCosmetics = new Map(); // nick -> equipped slots
+const pendingLookups = new Set();
+
+function decorateChat() {
+	document.querySelectorAll('.chat-msg').forEach((row) => {
+		const node = row.querySelector('.chat-nick');
+		if (!node) return;
+		const nick = node.textContent.replace(/:\s*$/, '').trim();
+		if (!nick) return;
+		const active = chatCosmetics.get(nick);
+		if (!active) { if (!pendingLookups.has(nick)) lookupCosmetics(nick); return; }
+		node.className = 'chat-nick' + (active.nick ? ` cosmetic-${active.nick}` : '');
+		for (const slot of SLOTS) {
+			if (slot === 'nick') continue;
+			if (active[slot]) node.dataset[slot] = active[slot];
+			else delete node.dataset[slot];
+		}
+		row.dataset.cosmeticFrame = active.frame || '';
+	});
+}
+
+async function lookupCosmetics(nick) {
+	pendingLookups.add(nick);
+	try { const result = await api.get(`/api/cosmetics?nick=${encodeURIComponent(nick)}`); chatCosmetics.set(nick, result.cosmetics || {}); decorateChat(); }
+	catch { chatCosmetics.set(nick, {}); }
+	finally { pendingLookups.delete(nick); }
+}
+
+// Chat history now carries each author's cosmetics; cache them before rendering.
+const originalChatGet = api.chatGet.bind(api);
+api.chatGet = async (worldId) => {
+	const result = await originalChatGet(worldId);
+	if (result.cosmetics) for (const [nick, slots] of Object.entries(result.cosmetics)) chatCosmetics.set(nick, slots || {});
+	for (const message of result.messages || []) if (message.cosmetics) chatCosmetics.set(message.nick, message.cosmetics);
+	setTimeout(decorateChat, 0);
+	return result;
+};
+
+// Live SSE messages carry no cosmetics, so unknown authors are resolved on demand.
+const originalStream = api.stream.bind(api);
+api.stream = (worldId, handlers = {}) => {
+	const chat = handlers.chat;
+	if (chat) handlers.chat = (data) => {
+		if (data?.cosmetics) chatCosmetics.set(data.nick, data.cosmetics);
+		chat(data);
+		if (data?.nick && !chatCosmetics.has(data.nick)) lookupCosmetics(data.nick); else setTimeout(decorateChat, 0);
+	};
+	return originalStream(worldId, handlers);
+};
+
+function applyCosmetics(active = {}) { for (const slot of SLOTS) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || ''; const nick = api.state.me?.nick; if (nick) chatCosmetics.set(nick, { ...active }); decorateChat(); }
 async function openPlayerProfile() {
 	try { const [stats, inventory, pref] = await Promise.all([api.stats(), api.inventory(), api.get('/api/me/preferences')]); const active = pref.cosmetics?.equipped || {}; applyCosmetics(active);
 		const body = el('div', { class: 'profile' }, el('h4', {}, 'Глобальная статистика'), el('div', { class: 'stat-grid' }, stat('Уровень', stats.global.level), stat('XP', stats.global.xp), stat('Монеты', stats.global.coins))); body.appendChild(el('h4', {}, 'Косметика — можно надеть по одной вещи каждого типа'));
@@ -37,5 +89,5 @@ async function openPlayerProfile() {
 function stat(label, value) { return el('div', { class: 'stat' }, el('span', { class: 'stat-v' }, String(value || 0)), el('span', { class: 'stat-l' }, label)); }
 function enhanceEvents() { const root = document.getElementById('panelBody'), events = api.state._events || []; if (!root || !events.length) return; root.querySelectorAll('.quest').forEach((node) => { if (node.dataset.eventReady) return; const event = events.find((item) => node.textContent.includes(item.title || item.key)); if (!event) return; node.dataset.eventReady = '1'; const details = el('div', { class: 'event-details muted small' }, `Цель: ${event.goalPerPlayer || 0} пикселей · Награда: ${event.reward?.coins || 0} монет, ${event.reward?.xp || 0} XP`); details.hidden = true; const button = el('button', { class: 'link-btn', onclick: () => { details.hidden = !details.hidden; button.textContent = details.hidden ? 'Подробнее' : 'Скрыть'; } }, 'Подробнее'); node.firstChild.appendChild(button); node.appendChild(details); }); }
 const originalEvents = api.events; api.events = async () => { const result = await originalEvents(); api.state._events = result.active || []; return result; };
-const observer = new MutationObserver(() => { const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs'); if (chat && toggle && tabs && toggle.previousElementSibling !== null) tabs.insertBefore(toggle, chat); const me = document.querySelector('#userBox .me'); if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; } decorateOwnChat(Object.fromEntries(['frame','nick','badge','trail','cursor'].map((slot) => [slot, document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`]]))); enhanceEvents(); });
+const observer = new MutationObserver(() => { const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs'); if (chat && toggle && tabs && toggle.previousElementSibling !== null) tabs.insertBefore(toggle, chat); const me = document.querySelector('#userBox .me'); if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; } decorateChat(); enhanceEvents(); });
 observer.observe(document.documentElement, { childList: true, subtree: true });
