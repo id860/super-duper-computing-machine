@@ -22,10 +22,11 @@ jobs:
           node --check server-v3.mjs
           node --check src/http/api.mjs
           node --check src/http/chunks.mjs
+          node --check src/http/world-bootstrap.mjs
           node --check src/core/model.mjs
           node --check src/core/world-fixes.mjs
       - name: Verify v3 architecture and chunk contracts
-        run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/world-fixes.test.mjs
+        run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs
 
   docker:
     runs-on: ubuntu-latest
