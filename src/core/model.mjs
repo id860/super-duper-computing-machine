@@ -21,8 +21,15 @@ export const ENERGY_MODES = ['cooldown', 'stock', 'infinite', 'off'];
 
 export const PROTECTION_LEVELS = ['none', 'soft', 'guests', 'authors', 'frozen', 'timed'];
 
+// Бесконечный мир: центральная зона спавна SPAWN_SIZE×SPAWN_SIZE даёт больше
+// наград (XP) и полезностей, чем область за её пределами.
+export const SPAWN_SIZE = 1000;
+export const SPAWN_HALF = SPAWN_SIZE / 2;
+export const SPAWN_XP_MULTIPLIER = 2;
+
+// Ластик убран. Кисти: brush2 (2×2) и brush3 (3×3).
 export const TOOLS = [
-	'pixel', 'brush2', 'brush3', 'line', 'rect', 'fill', 'eraser', 'picker',
+	'pixel', 'brush2', 'brush3', 'line', 'rect', 'fill', 'picker',
 	'move', 'copy', 'stamp', 'template', 'protect', 'restore'
 ];
 
@@ -71,7 +78,6 @@ function toolDefaults(overrides = {}) {
 		line: { enabled: true, cost: 1, cooldownMs: 0, maxSize: 64, minRole: 'member', dailyLimit: 0, allowInProtected: false },
 		rect: { enabled: true, cost: 1, cooldownMs: 0, maxSize: 48, minRole: 'member', dailyLimit: 0, allowInProtected: false },
 		fill: { enabled: false, cost: 1, cooldownMs: 5000, maxSize: 4096, minRole: 'trusted', dailyLimit: 20, allowInProtected: false },
-		eraser: { enabled: true, cost: 1, cooldownMs: 0, maxSize: 8, minRole: 'member', dailyLimit: 0, allowInProtected: false },
 		picker: { enabled: true, cost: 0, cooldownMs: 0, maxSize: 1, minRole: 'guest', dailyLimit: 0, allowInProtected: true },
 		move: { enabled: false, cost: 1, cooldownMs: 15000, maxSize: 1024, minRole: 'trusted', dailyLimit: 10, allowInProtected: false },
 		copy: { enabled: false, cost: 0, cooldownMs: 2000, maxSize: 1024, minRole: 'trusted', dailyLimit: 0, allowInProtected: true },
@@ -99,7 +105,7 @@ export const PRESETS = {
 		description: 'Завершённые работы регистрируются и защищаются, разрушение ограничено.',
 		patch: {
 			energy: { mode: 'cooldown', cooldownMs: 3000, maxEnergy: 60, startEnergy: 30 },
-			tools: toolDefaults({ fill: { enabled: false }, move: { enabled: false }, eraser: { minRole: 'trusted' } }),
+			tools: toolDefaults({ fill: { enabled: false }, move: { enabled: false } }),
 			protection: { maxAreas: 120, maxPercent: 70, requireApproval: true, minArtSize: 64 }
 		}
 	},
@@ -118,7 +124,7 @@ export const PRESETS = {
 		description: 'Команды, территории, флаги и автоматический подсчёт победителя.',
 		patch: {
 			energy: { mode: 'cooldown', cooldownMs: 800, maxEnergy: 80, startEnergy: 40 },
-			tools: toolDefaults({ fill: { enabled: true, minRole: 'trusted' }, eraser: { enabled: true } }),
+			tools: toolDefaults({ fill: { enabled: true, minRole: 'trusted' } }),
 			protection: { maxAreas: 8, maxPercent: 10 },
 			battle: { enabled: true, teams: ['red', 'blue'], roundMs: 86400000 }
 		}
@@ -228,8 +234,11 @@ export function createWorld(input = {}, ownerId = null) {
 	const t = now();
 	const presetKey = pick(Object.keys(PRESETS), input.preset, 'free_canvas');
 	const preset = PRESETS[presetKey].patch;
-	const width = int(input.width, 32, 512, 128);
-	const height = int(input.height, 32, 512, 96);
+	// Миры по умолчанию квадратные и бесконечные; width/height задают стартовую
+	// (видимую) область, но не ограничивают рисование за её пределами.
+	const infinite = bool(input.infinite, true);
+	const width = int(input.width, 32, 100000, SPAWN_SIZE);
+	const height = int(input.height, 32, 100000, width);
 	return {
 		id: input.id || id('world'),
 		name: clean(input.name, 48) || PRESETS[presetKey].title,
@@ -243,6 +252,8 @@ export function createWorld(input = {}, ownerId = null) {
 		ownerId,
 		width,
 		height,
+		infinite,
+		spawn: SPAWN_SIZE,
 		background: PALETTE.includes(input.background) ? input.background : '#ffffff',
 		grid: bool(input.grid, true),
 		zoomMin: clamp(input.zoomMin, 0.25, 4, 0.5),
@@ -300,8 +311,9 @@ export function officialWorld() {
 			icon: '🌍',
 			type: 'official',
 			preset: 'free_canvas',
-			width: 256,
-			height: 160,
+			infinite: true,
+			width: 1000,
+			height: 1000,
 			palette: [...PALETTE],
 			energy: { mode: 'cooldown', cooldownMs: 2500, maxEnergy: 30, startEnergy: 15 },
 			protection: { maxAreas: 0, maxPercent: 0, unlimited: false },
@@ -417,8 +429,10 @@ export function migrate(raw) {
 		const world = { ...base, ...raw2 };
 		world.id = wid;
 		world.type = isOfficial ? 'official' : 'community';
-		world.width = int(raw2.width, 32, 512, base.width);
-		world.height = int(raw2.height, 32, 512, base.height);
+		world.width = int(raw2.width, 32, 100000, base.width);
+		world.height = int(raw2.height, 32, 100000, base.height);
+		world.infinite = typeof raw2.infinite === 'boolean' ? raw2.infinite : base.infinite;
+		world.spawn = int(raw2.spawn, 32, 100000, SPAWN_SIZE);
 		world.palette = Array.isArray(raw2.palette) && raw2.palette.length ? uniq(raw2.palette.filter((c) => PALETTE.includes(c))) : base.palette;
 		if (!world.palette.length) world.palette = [...PALETTE];
 		world.access = defaultAccess({ ...base.access, ...(raw2.access || {}) });
@@ -443,10 +457,10 @@ export function migrate(raw) {
 					id: aid,
 					name: clean(art.name, 48) || 'Арт',
 					description: clean(art.description, 200),
-					x: int(art.x, 0, 512, 0),
-					y: int(art.y, 0, 512, 0),
-					width: int(art.width, 1, 512, 1),
-					height: int(art.height, 1, 512, 1),
+					x: int(art.x, 0, 100000, 0),
+					y: int(art.y, 0, 100000, 0),
+					width: int(art.width, 1, 100000, 1),
+					height: int(art.height, 1, 100000, 1),
 					ownerId: art.ownerId || null,
 					authors: Array.isArray(art.authors) ? art.authors : art.ownerId ? [art.ownerId] : [],
 					level: pick(PROTECTION_LEVELS, art.level, 'authors'),

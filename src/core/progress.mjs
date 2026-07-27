@@ -1,6 +1,6 @@
 // Прогрессия, квесты, достижения, экономика и рейтинги.
 // Главный принцип: только официальный мир даёт глобальный опыт/рейтинг/экономику.
-import { ACHIEVEMENTS, QUEST_POOL, SHOP_ITEMS } from './model.mjs';
+import { ACHIEVEMENTS, QUEST_POOL, SHOP_ITEMS, SPAWN_XP_MULTIPLIER } from './model.mjs';
 import { now, today } from './util.mjs';
 
 const COMMUNITY_NOTICE = 'Активность в мирах сообщества не влияет на глобальный рейтинг, достижения и экономику.';
@@ -137,11 +137,16 @@ export function awardPixels(user, world, count, meta = {}) {
 	}
 
 	// Официальный мир: глобальная прогрессия.
+	// Пиксели внутри зоны спавна дают повышенную награду (XP и монеты),
+	// пиксели за её пределами — сниженную. meta.spawn = сколько из count в зоне.
 	const levelBefore = user.level;
 	user.officialPixels = Number(user.officialPixels || 0) + count;
-	const xp = count * 2;
+	const spawnCount = Math.min(count, Math.max(0, Math.trunc(Number(meta.spawn ?? count))));
+	const outsideCount = count - spawnCount;
+	user.usefulPixels = Number(user.usefulPixels || 0) + spawnCount;
+	const xp = spawnCount * 2 * SPAWN_XP_MULTIPLIER + outsideCount * 1;
 	addXp(user, xp);
-	const coins = Math.max(1, Math.floor(count / 2));
+	const coins = Math.max(1, Math.floor(spawnCount / 2) + Math.floor(outsideCount / 4));
 	user.inventory.coins += coins;
 	if (!user.season || user.season.id !== seasonId(t)) user.season = { id: seasonId(t), pixels: 0 };
 	user.season.pixels += count;
