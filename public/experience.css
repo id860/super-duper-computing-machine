@@ -1,0 +1,7 @@
+#sidebarToggle { width: 28px; border-left: 0; border-right: 1px solid var(--line); }
+.tabs #sidebarToggle { min-height: 42px; }
+.profile-setting { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+.event-details { width: 100%; padding-top: 8px; line-height: 1.45; }
+body[data-cosmetic="frame_neon"] .me { box-shadow: 0 0 0 2px #a855f7, 0 0 10px rgba(168,85,247,.45); }
+body[data-cosmetic="nick_gradient"] .me-nick { background: linear-gradient(90deg,#2563eb,#a855f7,#ec4899); color: transparent; background-clip: text; -webkit-background-clip: text; }
+body[data-cosmetic="badge_pioneer"] .me::after { content: '✦'; color: #d97706; font-size: 15px; }
