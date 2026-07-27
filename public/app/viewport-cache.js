@@ -28,5 +28,10 @@ PixelEngine.prototype._loadViewportChunks = async function () {
 			dropped += evictChunkPixels(this.pixels, oldKey, FINE_CHUNK_SIZE, freshBefore);
 		}
 	}
-	if (dropped) { this._miniDirty = true; this.draw(); }
+	// Cached render tiles still hold the evicted pixels, so drop them as well.
+	if (dropped) {
+		if (this.invalidateAllTiles) this.invalidateAllTiles();
+		this._miniDirty = true;
+		this.draw();
+	}
 };
