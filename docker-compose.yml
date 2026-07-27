@@ -9,9 +9,21 @@ services:
       ADMIN_NICK: ${ADMIN_NICK:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       APP_ORIGIN: ${APP_ORIGIN:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      REDIS_URL: ${REDIS_URL:-}
+      CHUNK_READ_MODE: ${CHUNK_READ_MODE:-json}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-300}
+      AUTOMATION_MODE: ${AUTOMATION_MODE:-inline}
     volumes:
       - pixelfront-data:/app/data
     restart: unless-stopped
-
+  worker:
+    build: .
+    command: node worker-v3.mjs
+    profiles: ["worker"]
+    environment:
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL when enabling the worker profile}
+      AUTOMATION_INTERVAL_MS: ${AUTOMATION_INTERVAL_MS:-60000}
+    restart: unless-stopped
 volumes:
   pixelfront-data:

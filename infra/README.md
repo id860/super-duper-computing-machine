@@ -1,13 +1,18 @@
-# Инфраструктурная заготовка
+# Infrastructure runtime
 
-`docker compose -f docker-compose.infra.yml up -d` поднимает PostgreSQL 16 и Redis 7 для следующего этапа масштабирования. Они **не подключены** к текущему runtime: production/MVP продолжает использовать `DATA_DIR/db.json`.
+The default application starts with JSON storage and no external dependencies. PostgreSQL and Redis are optional and are activated only through explicit environment variables.
 
-## План переключения
+## Safe rollout
 
-1. Добавить adapter interface для `Store` и dual-write в JSON/PostgreSQL.
-2. Импортировать `worlds` и разложить `pixels` по `world_chunks` размером 256×256.
-3. Сверять revision и переключить read-path чанков на PostgreSQL.
-4. Вынести сессии, rate limits и SSE fan-out в Redis.
-5. После метрик и rollback-периода отключить JSON write-path.
+1. Start PostgreSQL and run `infra/postgres/001_init.sql`.
+2. Set `DATABASE_URL` and restart once. The server enables **dual-write**: JSON stays authoritative and is mirrored to `worlds` and `world_chunks`.
+3. Verify the mirror, then set `CHUNK_READ_MODE=postgres`. Only viewport chunk reads switch to PostgreSQL. Any query failure falls back to JSON automatically; set `CHUNK_READ_MODE=json` to roll back immediately.
+4. Set `REDIS_URL` to enable cross-instance SSE fan-out and a distributed per-IP API limit (`API_RATE_LIMIT`, default 300/minute).
+5. To schedule automation through a separate worker, start `docker compose --profile worker up -d`, set `AUTOMATION_MODE=worker` on app instances, and provide the same `REDIS_URL`. The worker publishes a tick; Redis elects exactly one web instance to execute it, keeping JSON writes single-writer.
 
-Схема `postgres/001_init.sql` хранит мир отдельно от изменяемых чанков и append-only событий пикселей. Это позволяет читать viewport одной выборкой по ключам `(world_id, chunk_x, chunk_y)`.
+## Runtime variables
+
+- `DATABASE_URL`, `POSTGRES_POOL_SIZE`
+- `REDIS_URL`, `API_RATE_LIMIT`
+- `CHUNK_READ_MODE=json|postgres`
+- `AUTOMATION_MODE=inline|worker`, `AUTOMATION_INTERVAL_MS`
