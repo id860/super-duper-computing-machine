@@ -155,3 +155,22 @@ body {
 	.energy { min-width: 90px; }
 	.world-info #worldName { display: none; }
 }
+
+/* --- Админ-панель --- */
+.admin-view{display:flex;flex-direction:column;gap:10px}
+.admin-form{gap:8px}
+.admin-form h4{margin:12px 0 2px;font-size:13px;letter-spacing:.02em;opacity:.7}
+.admin-field{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.admin-lbl{font-size:13px;flex:0 0 auto}
+.admin-field .input{max-width:220px}
+.input.mini{max-width:96px}
+.admin-check{display:inline-flex;align-items:center}
+.admin-actions{display:flex;gap:8px;margin-top:10px}
+.admin-tool{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.admin-search{display:flex;gap:8px;margin-bottom:8px}
+.admin-users{display:flex;flex-direction:column;gap:6px}
+.admin-user{border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:hidden}
+.admin-user-head{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer}
+.admin-user-edit{display:flex;flex-direction:column;gap:6px;padding:10px;border-top:1px solid rgba(255,255,255,.08)}
+.chip.danger{background:#5a1f28;color:#ffb4bd}
+.btn.danger{background:#7a2531;color:#fff}

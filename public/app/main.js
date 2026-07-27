@@ -169,20 +169,169 @@ panels.quests = async (root) => {
 };
 
 panels.admin = async (root) => {
-	root.innerHTML = '<p class="muted small">Загрузка…</p>';
+	root.innerHTML = '';
+	let sub = 'world';
+	const tabs = el('div', { class: 'subtabs' });
+	const view = el('div', { class: 'admin-view' });
+	const items = [['world', 'Мир'], ['players', 'Игроки'], ['mod', 'Модерация']];
+	const renderSub = () => {
+		tabs.querySelectorAll('.subtab').forEach((b) => b.classList.toggle('active', b.dataset.sub === sub));
+		if (sub === 'world') adminWorld(view);
+		else if (sub === 'players') adminPlayers(view);
+		else adminModeration(view);
+	};
+	for (const [k, label] of items) tabs.appendChild(el('button', { class: 'subtab', 'data-sub': k, onclick: () => { sub = k; renderSub(); } }, label));
+	root.appendChild(tabs);
+	root.appendChild(view);
+	renderSub();
+};
+
+async function adminWorld(view) {
+	view.innerHTML = '<p class="muted small">Загрузка настроек мира…</p>';
+	try {
+		const worldId = (app.world && app.world.type === 'official') ? app.world.id : 'official';
+		const r = await api.adminWorld(worldId);
+		const w = r.world;
+		view.innerHTML = '';
+		const form = el('div', { class: 'form admin-form' });
+		const patch = {};
+		const field = (label, node) => form.appendChild(el('label', { class: 'admin-field' }, el('span', { class: 'admin-lbl' }, label), node));
+		const text = (key, val, attrs = {}) => { const i = el('input', { class: 'input', value: val == null ? '' : val, ...attrs }); i.addEventListener('input', () => patch[key] = i.type === 'number' ? +i.value : i.value); return i; };
+		const num = (key, val, min, max) => text(key, val, { type: 'number', min: String(min), max: String(max) });
+		const check = (key, val) => { const i = el('input', { type: 'checkbox' }); i.checked = !!val; i.addEventListener('change', () => patch[key] = i.checked); return el('span', { class: 'admin-check' }, i); };
+		const select = (key, val, opts) => { const s = el('select', { class: 'input' }, ...opts.map((o) => el('option', { value: o, selected: o === val ? true : undefined }, o))); s.addEventListener('change', () => patch[key] = s.value); return s; };
+
+		form.appendChild(el('h4', {}, 'Основные'));
+		field('Название', text('name', w.name));
+		field('Описание', text('description', w.description));
+		field('Иконка', text('icon', w.icon, { maxlength: '8' }));
+		field('Фон (#hex)', text('background', w.background));
+		field('Сетка', check('grid', w.grid));
+		field('Разрешить скачивание', check('allowDownload', w.allowDownload));
+		field('В каталоге', check('listed', w.listed));
+
+		form.appendChild(el('h4', {}, 'Холст'));
+		field('Зона спавна', num('spawn', w.spawn, 100, 100000));
+		field('Мин. зум', text('zoomMin', w.zoomMin, { type: 'number', step: '0.1', min: '0.1', max: '5' }));
+		field('Макс. зум', num('zoomMax', w.zoomMax, 5, 200));
+		field('Размер', el('span', { class: 'muted small' }, (w.infinite ? 'бесконечный · ' : '') + w.width + '×' + w.height));
+
+		form.appendChild(el('h4', {}, 'Доступ'));
+		field('Режим доступа', select('__accessMode', w.access.mode, (api.state.config && api.state.config.accessModes) || ['public']));
+
+		form.appendChild(el('h4', {}, 'Энергия'));
+		const e = w.energy || {};
+		const ePatch = {};
+		const eNum = (k, v, min, max) => { const i = el('input', { class: 'input', type: 'number', value: v == null ? 0 : v, min: String(min), max: String(max) }); i.addEventListener('input', () => ePatch[k] = +i.value); return i; };
+		field('Режим', (() => { const s = el('select', { class: 'input' }, ...['cooldown', 'stock', 'infinite', 'off'].map((o) => el('option', { value: o, selected: o === e.mode ? true : undefined }, o))); s.addEventListener('change', () => ePatch.mode = s.value); return s; })());
+		field('Кулдаун (мс)', eNum('cooldownMs', e.cooldownMs, 200, 600000));
+		field('Макс. энергия', eNum('maxEnergy', e.maxEnergy, 1, 1000));
+		field('Дневной лимит', eNum('dailyLimit', e.dailyLimit, 0, 1000000));
+
+		form.appendChild(el('h4', {}, 'Чат'));
+		const c = w.chat || {};
+		const cPatch = {};
+		field('Чат включён', (() => { const i = el('input', { type: 'checkbox' }); i.checked = c.enabled !== false; i.addEventListener('change', () => cPatch.enabled = i.checked); return el('span', { class: 'admin-check' }, i); })());
+		field('Slow-mode (мс)', (() => { const i = el('input', { class: 'input', type: 'number', value: c.slowModeMs == null ? 0 : c.slowModeMs, min: '0', max: '600000' }); i.addEventListener('input', () => cPatch.slowModeMs = +i.value); return i; })());
+		field('Ссылки разрешены', (() => { const i = el('input', { type: 'checkbox' }); i.checked = !!c.allowLinks; i.addEventListener('change', () => cPatch.allowLinks = i.checked); return el('span', { class: 'admin-check' }, i); })());
+
+		form.appendChild(el('h4', {}, 'Инструменты'));
+		const toolsPatch = {};
+		for (const [tool, cfg] of Object.entries(w.tools || {})) {
+			const tp = {};
+			toolsPatch[tool] = tp;
+			const en = el('input', { type: 'checkbox' }); en.checked = cfg.enabled !== false; en.addEventListener('change', () => tp.enabled = en.checked);
+			const sz = el('input', { class: 'input mini', type: 'number', value: cfg.maxSize == null ? 1 : cfg.maxSize, min: '1', max: '65536' }); sz.addEventListener('input', () => tp.maxSize = +sz.value);
+			form.appendChild(el('div', { class: 'admin-tool' }, el('span', { class: 'admin-lbl' }, tool), el('span', { class: 'admin-check' }, en), el('span', { class: 'muted small' }, 'размер'), sz));
+		}
+
+		const save = el('button', { class: 'btn btn-primary', onclick: async () => {
+			const payload = { ...patch };
+			if (patch.__accessMode) { payload.access = { mode: patch.__accessMode }; delete payload.__accessMode; }
+			if (Object.keys(ePatch).length) payload.energy = ePatch;
+			if (Object.keys(cPatch).length) payload.chat = cPatch;
+			const tp = {}; for (const [t, v] of Object.entries(toolsPatch)) if (Object.keys(v).length) tp[t] = v;
+			if (Object.keys(tp).length) payload.tools = tp;
+			try { await api.patchWorld(w.id, payload); toast('Мир обновлён', 'success'); if (app.world && app.world.id === w.id) reloadWorld(); } catch (err) { toast(err.message, 'error'); }
+		} }, 'Сохранить настройки мира');
+		form.appendChild(el('div', { class: 'admin-actions' }, save));
+		view.appendChild(form);
+	} catch (err) { view.innerHTML = ''; view.appendChild(el('p', { class: 'muted small' }, err.message)); }
+}
+
+async function adminPlayers(view) {
+	view.innerHTML = '';
+	const search = el('input', { class: 'input', placeholder: 'Поиск игрока по нику…' });
+	const listBox = el('div', { class: 'admin-users' });
+	const load = async () => {
+		listBox.innerHTML = '<p class="muted small">Загрузка…</p>';
+		try {
+			const r = await api.adminUsers(search.value.trim());
+			listBox.innerHTML = '';
+			if (!r.users.length) listBox.appendChild(el('p', { class: 'muted small' }, 'Никого не найдено'));
+			for (const u of r.users) listBox.appendChild(userRow(u, load));
+		} catch (err) { listBox.innerHTML = ''; listBox.appendChild(el('p', { class: 'muted small' }, err.message)); }
+	};
+	let t = null; search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); });
+	view.appendChild(el('div', { class: 'admin-search' }, search, el('button', { class: 'btn small', onclick: load }, 'Обновить')));
+	view.appendChild(listBox);
+	load();
+}
+
+function userRow(u, reload) {
+	const head = el('div', { class: 'admin-user-head' },
+		el('span', { class: 'me-nick' }, u.nick),
+		el('span', { class: 'chip' }, u.role),
+		el('span', { class: 'chip' }, 'ur ' + u.level),
+		u.banned ? el('span', { class: 'chip danger' }, 'BAN') : null
+	);
+	const details = el('div', { class: 'admin-user-edit' });
+	let open = false;
+	const patch = {};
+	const numf = (label, key, val) => { const i = el('input', { class: 'input mini', type: 'number', value: val == null ? 0 : val }); i.addEventListener('input', () => patch[key] = +i.value); return el('label', { class: 'admin-field' }, el('span', { class: 'admin-lbl' }, label), i); };
+	const build = () => {
+		details.innerHTML = '';
+		details.appendChild(el('label', { class: 'admin-field' }, el('span', { class: 'admin-lbl' }, 'Роль'), (() => { const s = el('select', { class: 'input' }, ...['user', 'moderator', 'admin'].map((o) => el('option', { value: o, selected: o === u.role ? true : undefined }, o))); s.addEventListener('change', () => patch.role = s.value); return s; })()));
+		details.appendChild(numf('Уровень', 'level', u.level));
+		details.appendChild(numf('XP', 'xp', u.xp));
+		details.appendChild(numf('Пиксели (офиц.)', 'officialPixels', u.officialPixels));
+		details.appendChild(numf('Пиксели (сообщ.)', 'communityPixels', u.communityPixels));
+		details.appendChild(numf('Монеты', 'coins', u.coins));
+		details.appendChild(numf('Слоты миров', 'worldSlots', u.worldSlots));
+		const verified = el('input', { type: 'checkbox' }); verified.checked = !!u.verified; verified.addEventListener('change', () => patch.verified = verified.checked);
+		details.appendChild(el('label', { class: 'admin-field' }, el('span', { class: 'admin-lbl' }, 'Верифицирован'), el('span', { class: 'admin-check' }, verified)));
+		const banBtn = el('button', { class: 'btn small ' + (u.banned ? '' : 'danger'), onclick: async () => {
+			try {
+				if (u.banned) await api.patchUser(u.id, { ban: null });
+				else { const reason = prompt('Причина бана?') || 'Нарушение правил'; await api.patchUser(u.id, { ban: { reason } }); }
+				toast('Готово', 'success'); reload();
+			} catch (err) { toast(err.message, 'error'); }
+		} }, u.banned ? 'Снять бан' : 'Забанить');
+		const save = el('button', { class: 'btn btn-primary small', onclick: async () => {
+			try { await api.patchUser(u.id, patch); toast('Игрок обновлён', 'success'); reload(); } catch (err) { toast(err.message, 'error'); }
+		} }, 'Сохранить');
+		details.appendChild(el('div', { class: 'admin-actions' }, save, banBtn));
+	};
+	head.addEventListener('click', () => { open = !open; details.style.display = open ? '' : 'none'; if (open && !details.childNodes.length) build(); });
+	details.style.display = 'none';
+	return el('div', { class: 'admin-user' }, head, details);
+}
+
+async function adminModeration(view) {
+	view.innerHTML = '<p class="muted small">Загрузка…</p>';
 	try {
 		const q = await api.adminQueue();
-		root.innerHTML = '';
-		root.appendChild(el('h4', {}, 'Очередь модерации (' + q.queue.length + ')'));
-		if (!q.queue.length) root.appendChild(el('p', { class: 'muted small' }, 'Пусто — автоматика справляется.'));
+		view.innerHTML = '';
+		view.appendChild(el('h4', {}, 'Очередь модерации (' + q.queue.length + ')'));
+		if (!q.queue.length) view.appendChild(el('p', { class: 'muted small' }, 'Пусто — автоматика справляется.'));
 		for (const item of q.queue.slice(0, 40)) {
-			root.appendChild(el('div', { class: 'quest' },
+			view.appendChild(el('div', { class: 'quest' },
 				el('div', {}, el('div', {}, (item.type || '?') + ' · ' + (item.priority || 'normal')), el('div', { class: 'muted small' }, JSON.stringify(item.details || {}).slice(0, 90))),
-				el('button', { class: 'btn small', onclick: async () => { try { await api.resolveQueue(item.id, 'ok'); toast('Закрыто', 'success'); panels.admin(root); } catch (err) { toast(err.message, 'error'); } } }, '✓')
+				el('button', { class: 'btn small', onclick: async () => { try { await api.resolveQueue(item.id, 'ok'); toast('Закрыто', 'success'); adminModeration(view); } catch (err) { toast(err.message, 'error'); } } }, '✓')
 			));
 		}
-	} catch (err) { root.innerHTML = ''; root.appendChild(el('p', { class: 'muted small' }, err.message)); }
-};
+	} catch (err) { view.innerHTML = ''; view.appendChild(el('p', { class: 'muted small' }, err.message)); }
+}
 
 function switchTab(name) {
 	document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
