@@ -1,4 +1,7 @@
 // UI-слой PixelFront: инструменты, палитра, панели, модалки.
+// + Горячие клавиши: E/1=пиксель, B/2=кисть 2x2, 3=кисть 3x3, L=линия, R=прям.оуг, F=заливка, P=пипетка, Ctrl+Z=отмена.
+// + Локальная отмена: _undoStack, undo() — восстанавливает пиксели локально + шлёт на сервер.
+// + Батчинг: операции накапливаются 80 мс перед отправкой.
 import { bresenham, rectCells } from './engine.js';
 
 export const el = (tag, attrs = {}, ...children) => {
@@ -38,7 +41,6 @@ export function modal(title, body, actions = []) {
 }
 
 // Пиксельные иконки инструментов: битовые карты 9×9, рисуются на canvas
-// вместо юникод-символов.
 const ICON_BITS = {
 	pixel: [[3,3],[4,3],[5,3],[3,4],[4,4],[5,4],[3,5],[4,5],[5,5]],
 	brush2: [[2,2],[3,2],[2,3],[3,3],[6,2],[7,2],[6,3],[7,3],[2,6],[3,6],[2,7],[3,7],[6,6],[7,6],[6,7],[7,7]],
@@ -70,13 +72,13 @@ export function toolIcon(tool, active) {
 }
 
 const TOOL_META = {
-	pixel: { label: 'Пиксель' },
-	brush2: { label: 'Кисть 2×2' },
-	brush3: { label: 'Кисть 3×3' },
-	line: { label: 'Линия' },
-	rect: { label: 'Прямоугольник' },
-	fill: { label: 'Заливка' },
-	picker: { label: 'Пипетка' },
+	pixel: { label: 'Пиксель', key: 'E' },
+	brush2: { label: 'Кисть 2×2', key: 'B' },
+	brush3: { label: 'Кисть 3×3', key: '3' },
+	line: { label: 'Линия', key: 'L' },
+	rect: { label: 'Прямоугольник', key: 'R' },
+	fill: { label: 'Заливка', key: 'F' },
+	picker: { label: 'Пипетка', key: 'P' },
 	move: { label: 'Перенос' },
 	copy: { label: 'Копия' },
 	stamp: { label: 'Штамп' },
@@ -84,6 +86,9 @@ const TOOL_META = {
 	protect: { label: 'Защита' },
 	restore: { label: 'Восстановить' }
 };
+
+// Мапа клавиша → название инструмента
+const KEY_MAP = { 'e': 'pixel', '1': 'pixel', 'b': 'brush2', '2': 'brush2', '3': 'brush3', 'l': 'line', 'r': 'rect', 'f': 'fill', 'p': 'picker' };
 
 export class Tools {
 	constructor(engine, api) {
@@ -99,7 +104,14 @@ export class Tools {
 		this.sending = false;
 		this.onReward = null;
 		this.onEnergy = null;
+		// Локальная отмена: каждый элемент = [{key, prev}]
+		this._undoStack = [];
+		// Ссылка на контейнер инструментов для перерисовки по hotkeys
+		this._toolContainer = null;
+		// Батчинг: таймер дебаунса подачи
+		this._batchTimer = null;
 		this._wire();
+		this._bindHotkeys();
 	}
 
 	setWorld(world) {
@@ -128,6 +140,47 @@ export class Tools {
 	_addBuffer(cells) {
 		const keys = new Set(this.buffer.map((c) => c[0] + ':' + c[1]));
 		for (const c of cells) { const k = c[0] + ':' + c[1]; if (!keys.has(k) && this._inBounds(c)) { keys.add(k); this.buffer.push(c); } }
+	}
+
+	// Горячие клавиши: E/B/3/L/R/F/P, Ctrl+Z
+	_bindHotkeys() {
+		window.addEventListener('keydown', (e) => {
+			// Не перехватываем пользовательский ввод в полях
+			const tag = document.activeElement ? document.activeElement.tagName : '';
+			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+			if (e.ctrlKey || e.metaKey) {
+				if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); this.undo(); }
+				return;
+			}
+			if (!this.world) return;
+			const toolName = KEY_MAP[e.key.toLowerCase()];
+			if (!toolName) return;
+			const enabled = toolName === 'picker' || (this.world.tools[toolName] && this.world.tools[toolName].enabled);
+			if (!enabled) return;
+			this.tool = toolName;
+			if (this._toolContainer) this.renderTools(this._toolContainer);
+		});
+	}
+
+	// Локальная отмена последнего штриха. Восстанавливает пиксели локально
+	// и шлёт операции с предыдущими цветами на сервер.
+	undo() {
+		const entry = this._undoStack.pop();
+		if (!entry || !entry.length) { toast('Нечего отменять', 'info'); return; }
+		const byColor = new Map();
+		for (const { key, prev } of entry) {
+			const [x, y] = key.split(':').map(Number);
+			const color = prev || (this.world ? this.world.background : '#ffffff');
+			this.engine.applyPixels([[x, y, color]]);
+			if (!byColor.has(color)) byColor.set(color, []);
+			byColor.get(color).push([x, y]);
+		}
+		for (const [color, cells] of byColor) {
+			const max = 256;
+			for (let i = 0; i < cells.length; i += max) this.queue.push({ tool: 'pixel', cells: cells.slice(i, i + max), color });
+		}
+		if (this.queue.length) this._drain();
+		toast('Отмена', 'info');
 	}
 
 	_wire() {
@@ -188,14 +241,30 @@ export class Tools {
 		return out;
 	}
 
+	// Сохраняем состояние до операции, применяем локально, добавляем в очередь с цветом.
 	_commit(tool, cells) {
 		cells = cells.filter((c) => this._inBounds(c));
 		if (!cells.length) return;
 		const color = this.color;
+		// Сохраняем состояние до изменения для undo
+		const undoEntry = cells
+			.map((c) => ({ key: c[0] + ':' + c[1], prev: this.engine.colorAt(c[0], c[1]) }))
+			.filter((e) => e.prev !== color); // только действительно меняющиеся пиксели
+		if (undoEntry.length) {
+			this._undoStack.push(undoEntry);
+			if (this._undoStack.length > 50) this._undoStack.shift(); // макс. 50 шагов
+		}
 		this.engine.applyPixels(cells.map((c) => [c[0], c[1], color]));
 		const max = Math.max(1, this._toolCfg(tool).maxSize || 1);
-		for (let i = 0; i < cells.length; i += max) this.queue.push({ tool, cells: cells.slice(i, i + max) });
-		this._drain();
+		for (let i = 0; i < cells.length; i += max) this.queue.push({ tool, cells: cells.slice(i, i + max), color });
+		this._scheduleDrain();
+	}
+
+	// Батчинг: если drain не запущен, накапливаем 80 мс перед отправкой
+	_scheduleDrain() {
+		if (this.sending) return; // drain уже работает, новые jobs подхватятся
+		clearTimeout(this._batchTimer);
+		this._batchTimer = setTimeout(() => { this._batchTimer = null; this._drain(); }, 80);
 	}
 
 	async _drain() {
@@ -204,7 +273,8 @@ export class Tools {
 		while (this.queue.length) {
 			const job = this.queue.shift();
 			try {
-				const res = await this.api.ops(this.world.id, { tool: job.tool, color: this.color, cells: job.cells });
+				// Используем job.color (не this.color) — важно для undo
+				const res = await this.api.ops(this.world.id, { tool: job.tool, color: job.color || this.color, cells: job.cells });
 				if (res.energy && this.onEnergy) this.onEnergy(res.energy);
 				if (res.reward && this.onReward) this.onReward(res.reward);
 			} catch (err) {
@@ -213,9 +283,11 @@ export class Tools {
 				try { const w = await this.api.world(this.world.id); this.engine.setWorld(w.world, w.pixels); } catch {}
 				break;
 			}
-			await new Promise((r) => setTimeout(r, 45));
+			await new Promise((r) => setTimeout(r, 40));
 		}
 		this.sending = false;
+		// Если во время drain пришли новые jobs — запускаем ещё раз
+		if (this.queue.length) this._drain();
 	}
 
 	_syncPalette() {
@@ -223,12 +295,15 @@ export class Tools {
 	}
 
 	renderTools(container) {
+		this._toolContainer = container; // Сохраняем для перерисовки по hotkeys
 		container.innerHTML = '';
 		const avail = Object.keys(TOOL_META).filter((t) => t === 'picker' || (this.world.tools[t] && this.world.tools[t].enabled));
 		for (const t of avail) {
 			const meta = TOOL_META[t];
-			const b = el('button', { class: 'tool' + (t === this.tool ? ' active' : ''), title: meta.label, 'data-tool': t, onclick: () => { this.tool = t; this.renderTools(container); } });
+			const b = el('button', { class: 'tool' + (t === this.tool ? ' active' : ''), title: meta.label + (meta.key ? ' [' + meta.key + ']' : ''), 'data-tool': t, onclick: () => { this.tool = t; this.renderTools(container); } });
 			b.appendChild(toolIcon(t, t === this.tool));
+			// Подсказка клавиши на кнопке
+			if (meta.key) b.appendChild(el('span', { class: 'hotkey-hint' }, meta.key));
 			container.appendChild(b);
 		}
 	}

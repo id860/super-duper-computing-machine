@@ -21,7 +21,7 @@ function updateEnergy(energy) {
 	if (!energy) return;
 	const pct = energy.mode === 'infinite' || energy.mode === 'off' ? 100 : Math.round((energy.value / Math.max(1, energy.max)) * 100);
 	$('energyFill').style.width = pct + '%';
-	$('energyText').textContent = energy.mode === 'infinite' ? '∞' : energy.mode === 'off' ? '—' : energy.value + '/' + energy.max;
+	$('energyText').textContent = energy.mode === 'infinite' ? '\u221e' : energy.mode === 'off' ? '\u2014' : energy.value + '/' + energy.max;
 }
 
 function renderMe() {
@@ -386,7 +386,8 @@ function reloadWorld() { if (app.world) openWorld(app.world.id); }
 function connectStream(worldId) {
 	if (app.stream) app.stream.close();
 	app.stream = api.stream(worldId, {
-		pixels: (d) => { if (d.pixels) app.engine.applyPixels(d.pixels); },
+		// Передаём nick (автор) и время — хранится в engine.pixelInfoAt()
+		pixels: (d) => { if (d.pixels) app.engine.applyPixels(d.pixels, d.by, Date.now()); },
 		chat: (d) => appendChat(d),
 		lifecycle: () => reloadWorld(),
 		reload: () => reloadWorld()
@@ -431,12 +432,61 @@ async function boot() {
 		if (api.state.me) { api.state.me.coins = (api.state.me.coins || 0) + (r.coins || 0); if (r.scope === 'official') { api.state.me.xp = (api.state.me.xp || 0) + (r.xp || 0); } renderMe(); }
 	};
 	app.engine.onView = (v) => { $('coords').textContent = v.x + ', ' + v.y + '  ×' + v.scale.toFixed(1); writeHash(); };
-	app.engine.onHover = () => {};
+
+	// ---------- Тултип автора пикселя ----------
+	const tooltip = el('div', { id: 'pixelTooltip' });
+	document.body.appendChild(tooltip);
+	let _tipTimer = null;
+	let _tipPos = null;
+
+	app.engine.onHover = (p, ev) => {
+		clearTimeout(_tipTimer);
+		tooltip.style.display = 'none';
+		if (!app.world) return;
+		_tipPos = { p, clientX: ev ? ev.clientX : 0, clientY: ev ? ev.clientY : 0 };
+		_tipTimer = setTimeout(async () => {
+			if (!_tipPos || _tipPos.p.x !== p.x || _tipPos.p.y !== p.y) return;
+			const info = app.engine.pixelInfoAt(p.x, p.y);
+			if (!info) return; // фон — нечего показывать
+			let nick = info.nick;
+			let at = info.at;
+			// Если nick не закэширован — запрашиваем сервер
+			if (!nick && app.world) {
+				try {
+					const r = await api.pixelInfo(app.world.id, p.x, p.y);
+					if (r.empty || !r.nick) return;
+					nick = r.nick; at = r.at;
+					// Обновляем кэш в engine
+					const cell = app.engine.pixelInfoAt(p.x, p.y);
+					if (cell) { cell.nick = nick; cell.at = at; }
+				} catch { return; }
+			}
+			if (!nick) return;
+			const timeStr = at ? new Date(at).toLocaleString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+			// Цветовой дот цвета пикселя
+			const dot = el('span', { class: 'tip-dot', style: 'background:' + (info.c || '#888') });
+			tooltip.innerHTML = '';
+			tooltip.appendChild(dot);
+			tooltip.appendChild(document.createTextNode(nick + (timeStr ? ' · ' + timeStr : '')));
+			// Позиционируем возле курсора
+			let tx = _tipPos.clientX + 16;
+			let ty = _tipPos.clientY + 14;
+			if (tx + 200 > window.innerWidth) tx = _tipPos.clientX - 196;
+			if (ty + 40 > window.innerHeight) ty = _tipPos.clientY - 34;
+			tooltip.style.left = tx + 'px';
+			tooltip.style.top = ty + 'px';
+			tooltip.style.display = 'block';
+		}, 380); // задержка 380мс — не вспывает при обычном движении
+	};
 
 	$('zoomIn').onclick = () => app.engine.zoomButton(1.25);
 	$('zoomOut').onclick = () => app.engine.zoomButton(1 / 1.25);
 	$('zoomFit').onclick = () => app.engine.fit();
 	document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+	// Кнопка отмены в тулбаре (Ctrl+Z)
+	const undoBtn = el('button', { id: 'undoBtn', class: 'tool', title: 'Отменить (Ctrl+Z)', onclick: () => app.tools.undo() }, '↩');
+	$('toolbar').appendChild(undoBtn);
 
 	// Кнопка сворачивания / разворачивания правой панели
 	const sidebar = $('sidebar');
