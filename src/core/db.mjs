@@ -6,6 +6,17 @@ import { randomBytes } from 'node:crypto';
 import { freshDb, migrate } from './model.mjs';
 import { id, now } from './util.mjs';
 
+// fsync недоступен на некоторых платформах/ФС (напр. Windows кидает EPERM,
+// особенно на дескрипторе каталога). Такие ошибки не должны рушить запись.
+const IGNORABLE_SYNC = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EISDIR', 'EACCES', 'ENOSYS']);
+async function syncQuietly(handle) {
+	try {
+		await handle.sync();
+	} catch (error) {
+		if (!IGNORABLE_SYNC.has(error.code)) throw error;
+	}
+}
+
 export class Store {
 	constructor(dir = './data') {
 		this.dir = resolve(dir);
@@ -59,15 +70,19 @@ export class Store {
 		try {
 			handle = await open(tmp, 'wx', 0o600);
 			await handle.writeFile(data, 'utf8');
-			await handle.sync();
+			await syncQuietly(handle);
 			await handle.close();
 			handle = null;
 			await rename(tmp, this.file);
-			const dir = await open(this.dir, 'r');
 			try {
-				await dir.sync();
-			} finally {
-				await dir.close();
+				const dir = await open(this.dir, 'r');
+				try {
+					await syncQuietly(dir);
+				} finally {
+					await dir.close();
+				}
+			} catch (error) {
+				if (!IGNORABLE_SYNC.has(error.code)) throw error;
 			}
 		} catch (error) {
 			if (handle) await handle.close().catch(() => {});
