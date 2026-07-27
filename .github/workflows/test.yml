@@ -22,4 +22,5 @@ jobs:
       - run: node --check src/http/api.mjs
       - run: node --check src/http/chunks.mjs
       - run: node --check src/core/model.mjs
-      - run: node --test test/core-v3.test.mjs test/chunks.test.mjs
+      - run: node --check src/core/world-fixes.mjs
+      - run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/world-fixes.test.mjs
