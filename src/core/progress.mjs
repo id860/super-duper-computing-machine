@@ -58,27 +58,33 @@ export function questView(user) {
 	};
 }
 
-export function trackQuest(user, metric, amount = 1) {
+// Общая механика продвижения: возвращает задания, которые именно сейчас
+// дошли до цели, чтобы игрок получил уведомление без перезагрузки панели.
+function advanceQuests(user, metric, next) {
 	const state = dailyState(user);
-	let changed = false;
+	const completed = [];
 	for (const q of state.quests) {
 		if (q.claimed) continue;
 		const def = QUEST_POOL.find((x) => x.id === q.id);
 		if (!def || def.metric !== metric) continue;
-		q.progress = Math.min(def.target, q.progress + amount);
-		changed = true;
+		const before = q.progress;
+		q.progress = Math.min(def.target, next(before, def));
+		if (before < def.target && q.progress >= def.target) completed.push({ id: def.id, title: def.title, reward: def.reward });
 	}
-	return changed;
+	return completed;
+}
+
+export function trackQuest(user, metric, amount = 1) {
+	return advanceQuests(user, metric, (progress) => progress + amount).length > 0;
+}
+
+// То же накопление, но со списком только что выполненных заданий.
+export function trackQuestCompletions(user, metric, amount = 1) {
+	return advanceQuests(user, metric, (progress) => progress + amount);
 }
 
 function raiseQuest(user, metric, value) {
-	const state = dailyState(user);
-	for (const q of state.quests) {
-		if (q.claimed) continue;
-		const def = QUEST_POOL.find((x) => x.id === q.id);
-		if (!def || def.metric !== metric) continue;
-		q.progress = Math.min(def.target, Math.max(q.progress, value));
-	}
+	return advanceQuests(user, metric, (progress) => Math.max(progress, value));
 }
 
 export function claimQuest(user, questId) {
@@ -133,7 +139,7 @@ export function awardPixels(user, world, count, meta = {}) {
 	if (world.type !== 'official') {
 		// Миры сообщества: только локальная статистика, без глобальной экономики.
 		user.communityPixels = Number(user.communityPixels || 0) + count;
-		return { scope: 'community', xp: 0, coins: 0, levelUp: false, achievements: [], local };
+		return { scope: 'community', xp: 0, coins: 0, levelUp: false, achievements: [], quests: [], local };
 	}
 
 	// Официальный мир: глобальная прогрессия.
@@ -152,17 +158,18 @@ export function awardPixels(user, world, count, meta = {}) {
 	user.season.pixels += count;
 
 	// Квесты.
-	trackQuest(user, 'official_pixels', count);
-	trackQuest(user, 'area_progress', meta.area || count);
-	if (meta.event) trackQuest(user, 'event_pixels', count);
+	const quests = [];
+	quests.push(...trackQuestCompletions(user, 'official_pixels', count));
+	quests.push(...trackQuestCompletions(user, 'area_progress', meta.area || count));
+	if (meta.event) quests.push(...trackQuestCompletions(user, 'event_pixels', count));
 	if (Array.isArray(meta.colors) && meta.colors.length) {
 		const state = dailyState(user);
 		for (const color of meta.colors) if (color && !state.colors.includes(color)) state.colors.push(color);
-		raiseQuest(user, 'colors_used', state.colors.length);
+		quests.push(...raiseQuest(user, 'colors_used', state.colors.length));
 	}
 
 	const achievements = grantAchievements(user);
-	return { scope: 'official', xp, coins, levelUp: user.level > levelBefore, achievements, local };
+	return { scope: 'official', xp, coins, levelUp: user.level > levelBefore, achievements, quests, local };
 }
 
 // -------- магазин --------
