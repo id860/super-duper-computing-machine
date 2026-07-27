@@ -30,6 +30,11 @@ jobs:
           node --check public/app/interaction-patch.js
           node --check public/app/viewport-cache.js
           node --check public/app/chunk-lru.js
+          node --check public/app/chunk-queue.js
+          node --check public/app/chunk-store.js
+          node --check public/app/chunk-prefetch.js
+          node --check public/app/tile-grid.js
+          node --check public/app/render-tiles.js
           node --check public/app/experience-patch.js
       - name: Verify unit, API and load contracts
         run: npm test
