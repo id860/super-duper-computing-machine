@@ -18,8 +18,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci --ignore-scripts
       - run: node --check server-v3.mjs
       - run: node --check src/http/api.mjs
       - run: node --check src/core/model.mjs
