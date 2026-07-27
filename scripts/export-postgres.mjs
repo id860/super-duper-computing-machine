@@ -1,11 +1,27 @@
 // Export the active JSON database into the PostgreSQL world_chunks schema.
-// Usage: DATA_FILE=./data/db.json node scripts/export-postgres.mjs > import.sql
+// Usage: DATA_DIR=./data node scripts/export-postgres.mjs > import.sql
+//        DATA_FILE=./data/db.legacy.json node scripts/export-postgres.mjs > import.sql
+// The database is stored as separate section files (data/sections/*.json); a
+// legacy single-file dump is still accepted through DATA_FILE.
 // The chunk size mirrors the runtime fine-chunk size so exported rows line up with live reads.
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { readSections, SECTIONS_DIR } from '../src/core/db.mjs';
 
 export const CHUNK_SIZE = Number(process.env.EXPORT_CHUNK_SIZE || 86);
 const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
 const chunkKey = (x, y) => `${Math.floor(x / CHUNK_SIZE)}:${Math.floor(y / CHUNK_SIZE)}`;
+
+// Accepts either a sectioned data directory or a single JSON dump.
+export async function loadDb({ file = process.env.DATA_FILE, dir = process.env.DATA_DIR || './data' } = {}) {
+	if (file) return JSON.parse(await readFile(file, 'utf8'));
+	const sections = await readSections(join(dir, SECTIONS_DIR));
+	if (sections) return sections;
+	const legacy = join(dir, 'db.json');
+	if (existsSync(legacy)) return JSON.parse(await readFile(legacy, 'utf8'));
+	throw new Error(`База не найдена в ${dir}`);
+}
 
 export function worldChunkRows(db) {
 	const rows = [];
@@ -39,7 +55,5 @@ export function toSql(db) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-	const file = process.env.DATA_FILE || './data/db.json';
-	const db = JSON.parse(await readFile(file, 'utf8'));
-	process.stdout.write(toSql(db));
+	process.stdout.write(toSql(await loadDb()));
 }
