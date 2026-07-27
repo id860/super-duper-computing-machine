@@ -65,11 +65,16 @@ export class PixelEngine {
 
 	fit() {
 		if (!this.world) return;
-		const sx = this.viewW / this.world.width;
-		const sy = this.viewH / this.world.height;
+		// Для бесконечных миров кадрируем по зоне спавна (spawn×spawn),
+		// иначе по фактическим размерам мира.
+		const inf = !!this.world.infinite;
+		const w = inf ? (this.world.spawn || this.world.width) : this.world.width;
+		const h = inf ? (this.world.spawn || this.world.height) : this.world.height;
+		const sx = this.viewW / w;
+		const sy = this.viewH / h;
 		this.scale = Math.max(this.minScale, Math.min(this.maxScale, Math.min(sx, sy) * 0.9));
-		this.offsetX = (this.viewW - this.world.width * this.scale) / 2;
-		this.offsetY = (this.viewH - this.world.height * this.scale) / 2;
+		this.offsetX = (this.viewW - w * this.scale) / 2;
+		this.offsetY = (this.viewH - h * this.scale) / 2;
 		this.draw();
 		this._emitView();
 	}
@@ -112,14 +117,18 @@ export class PixelEngine {
 		ctx.fillStyle = '#0d0f14';
 		ctx.fillRect(0, 0, this.viewW, this.viewH);
 		if (!this.world) return;
+		const inf = !!this.world.infinite;
 		const w = this.world.width, h = this.world.height;
-		ctx.fillStyle = this.world.background || '#ffffff';
-		ctx.fillRect(this.offsetX, this.offsetY, w * this.scale, h * this.scale);
-		const minX = Math.max(0, Math.floor((0 - this.offsetX) / this.scale));
-		const minY = Math.max(0, Math.floor((0 - this.offsetY) / this.scale));
-		const maxX = Math.min(w - 1, Math.ceil((this.viewW - this.offsetX) / this.scale));
-		const maxY = Math.min(h - 1, Math.ceil((this.viewH - this.offsetY) / this.scale));
+		const limX = inf ? 100000 : w;
+		const limY = inf ? 100000 : h;
 		const s = this.scale;
+		ctx.fillStyle = this.world.background || '#ffffff';
+		if (inf) ctx.fillRect(0, 0, this.viewW, this.viewH);
+		else ctx.fillRect(this.offsetX, this.offsetY, w * s, h * s);
+		const minX = Math.max(0, Math.floor((0 - this.offsetX) / s));
+		const minY = Math.max(0, Math.floor((0 - this.offsetY) / s));
+		const maxX = Math.min(limX - 1, Math.ceil((this.viewW - this.offsetX) / s));
+		const maxY = Math.min(limY - 1, Math.ceil((this.viewH - this.offsetY) / s));
 		for (let y = minY; y <= maxY; y++) {
 			for (let x = minX; x <= maxX; x++) {
 				const c = this.pixels.get(x + ':' + y);
@@ -144,13 +153,38 @@ export class PixelEngine {
 			}
 			ctx.stroke();
 		}
+		this._drawZone(ctx);
 		if (this.onOverlay) this.onOverlay(ctx);
-		if (this.hover && this.hover.x >= 0 && this.hover.y >= 0 && this.hover.x < w && this.hover.y < h) {
+		if (this.hover && this.hover.x >= 0 && this.hover.y >= 0 && this.hover.x < limX && this.hover.y < limY) {
 			ctx.strokeStyle = 'rgba(255,255,255,0.9)';
 			ctx.lineWidth = Math.max(1, Math.min(3, s / 6));
 			ctx.strokeRect(this.offsetX + this.hover.x * s, this.offsetY + this.hover.y * s, s, s);
 		}
 		this._drawMinimap(minX, minY, maxX, maxY);
+	}
+
+	_drawZone(ctx) {
+		const sp = this.world && this.world.spawn;
+		if (!sp || !this.world.infinite) return;
+		const s = this.scale;
+		const x0 = this.offsetX, y0 = this.offsetY, size = sp * s;
+		ctx.save();
+		ctx.strokeStyle = 'rgba(78,161,255,0.85)';
+		ctx.lineWidth = 2;
+		ctx.setLineDash([6, 4]);
+		ctx.strokeRect(x0, y0, size, size);
+		ctx.setLineDash([]);
+		const label = sp + '×' + sp;
+		ctx.font = '600 12px system-ui, -apple-system, sans-serif';
+		const tw = Math.ceil(ctx.measureText(label).width);
+		const lx = Math.min(Math.max(x0 + 6, 6), this.viewW - tw - 12);
+		const ly = Math.min(Math.max(y0 + 18, 18), this.viewH - 8);
+		ctx.fillStyle = 'rgba(13,15,20,0.78)';
+		ctx.fillRect(lx - 5, ly - 13, tw + 10, 18);
+		ctx.fillStyle = '#e8ecf4';
+		ctx.textBaseline = 'alphabetic';
+		ctx.fillText(label, lx, ly);
+		ctx.restore();
 	}
 
 	_drawMinimap(minX, minY, maxX, maxY) {

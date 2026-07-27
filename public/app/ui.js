@@ -37,21 +37,52 @@ export function modal(title, body, actions = []) {
 	return close;
 }
 
+// Пиксельные иконки инструментов: битовые карты 9×9, рисуются на canvas
+// вместо юникод-символов.
+const ICON_BITS = {
+	pixel: [[3,3],[4,3],[5,3],[3,4],[4,4],[5,4],[3,5],[4,5],[5,5]],
+	brush2: [[2,2],[3,2],[2,3],[3,3],[6,2],[7,2],[6,3],[7,3],[2,6],[3,6],[2,7],[3,7],[6,6],[7,6],[6,7],[7,7]],
+	brush3: [[1,1],[4,1],[7,1],[1,4],[4,4],[7,4],[1,7],[4,7],[7,7]],
+	line: [[1,7],[2,6],[3,5],[4,4],[5,3],[6,2],[7,1]],
+	rect: [[2,2],[3,2],[4,2],[5,2],[6,2],[2,6],[3,6],[4,6],[5,6],[6,6],[2,3],[2,4],[2,5],[6,3],[6,4],[6,5]],
+	fill: [[3,1],[2,2],[4,2],[2,3],[3,3],[4,3],[5,3],[3,4],[4,4],[5,4],[6,4],[4,5],[5,5],[6,5],[7,6],[7,7]],
+	picker: [[4,1],[4,2],[1,4],[2,4],[4,4],[6,4],[7,4],[4,6],[4,7]],
+	move: [[4,0],[3,1],[4,1],[5,1],[4,2],[4,3],[4,4],[4,5],[4,6],[4,7],[4,8],[3,7],[5,7],[0,4],[1,3],[1,4],[1,5],[2,4],[3,4],[5,4],[6,4],[7,4],[8,4],[7,3],[7,5]],
+	copy: [[1,1],[2,1],[3,1],[4,1],[1,2],[1,3],[1,4],[4,2],[4,3],[4,4],[2,4],[3,4],[5,4],[6,4],[7,4],[5,5],[5,6],[5,7],[7,5],[7,6],[7,7],[6,7]],
+	stamp: [[2,2],[3,2],[4,2],[5,2],[6,2],[2,6],[3,6],[4,6],[5,6],[6,6],[2,3],[2,4],[2,5],[6,3],[6,4],[6,5],[4,4]],
+	template: [[2,2],[4,2],[6,2],[2,4],[4,4],[6,4],[2,6],[4,6],[6,6]],
+	protect: [[3,1],[4,1],[5,1],[2,2],[6,2],[2,3],[6,3],[2,4],[6,4],[3,5],[5,5],[4,6],[4,3],[4,4]],
+	restore: [[3,1],[4,1],[5,1],[2,2],[6,2],[6,3],[4,3],[5,3],[2,4],[3,5],[4,6],[5,6]]
+};
+
+export function toolIcon(tool, active) {
+	const grid = 9, px = 3, pad = 3;
+	const size = grid * px + pad * 2;
+	const cv = document.createElement('canvas');
+	cv.width = size; cv.height = size;
+	cv.className = 'tool-ico';
+	const ctx = cv.getContext('2d');
+	ctx.imageSmoothingEnabled = false;
+	ctx.clearRect(0, 0, size, size);
+	ctx.fillStyle = active ? '#0d0f14' : '#cfd6e4';
+	for (const [x, y] of (ICON_BITS[tool] || ICON_BITS.pixel)) ctx.fillRect(pad + x * px, pad + y * px, px, px);
+	return cv;
+}
+
 const TOOL_META = {
-	pixel: { icon: '▪', label: 'Пиксель' },
-	brush2: { icon: '◼', label: 'Кисть 2×2' },
-	brush3: { icon: '⬛', label: 'Кисть 3×3' },
-	line: { icon: '╱', label: 'Линия' },
-	rect: { icon: '▭', label: 'Прямоугольник' },
-	fill: { icon: '🪣', label: 'Заливка' },
-	eraser: { icon: '⌫', label: 'Ластик' },
-	picker: { icon: '🎯', label: 'Пипетка' },
-	move: { icon: '✥', label: 'Перенос' },
-	copy: { icon: '⧉', label: 'Копия' },
-	stamp: { icon: '❖', label: 'Штамп' },
-	template: { icon: '▦', label: 'Шаблон' },
-	protect: { icon: '🛡', label: 'Защита' },
-	restore: { icon: '↺', label: 'Восстановить' }
+	pixel: { label: 'Пиксель' },
+	brush2: { label: 'Кисть 2×2' },
+	brush3: { label: 'Кисть 3×3' },
+	line: { label: 'Линия' },
+	rect: { label: 'Прямоугольник' },
+	fill: { label: 'Заливка' },
+	picker: { label: 'Пипетка' },
+	move: { label: 'Перенос' },
+	copy: { label: 'Копия' },
+	stamp: { label: 'Штамп' },
+	template: { label: 'Шаблон' },
+	protect: { label: 'Защита' },
+	restore: { label: 'Восстановить' }
 };
 
 export class Tools {
@@ -78,7 +109,11 @@ export class Tools {
 	}
 
 	_toolCfg(tool) { return (this.world && this.world.tools[tool]) || { maxSize: 1, enabled: true }; }
-	_inBounds(c) { return c[0] >= 0 && c[1] >= 0 && c[0] < this.world.width && c[1] < this.world.height; }
+	_inBounds(c) {
+		const lim = this.world.infinite ? 100000 : null;
+		if (lim) return c[0] >= 0 && c[1] >= 0 && c[0] < lim && c[1] < lim;
+		return c[0] >= 0 && c[1] >= 0 && c[0] < this.world.width && c[1] < this.world.height;
+	}
 
 	_brushCells(x, y, n) {
 		if (n <= 1) return [[x, y]];
@@ -121,7 +156,7 @@ export class Tools {
 			if (this.tool === 'line') { this._commit('line', bresenham(this.anchor.x, this.anchor.y, x, y)); this.anchor = null; this.preview = null; e.draw(); return; }
 			if (this.tool === 'rect') { this._commit('rect', rectCells(this.anchor.x, this.anchor.y, x, y, false)); this.anchor = null; this.preview = null; e.draw(); return; }
 			if (this.tool === 'fill') { this._commit('fill', this._flood(x, y)); this.buffer = []; this.preview = null; return; }
-			const tool = this.tool === 'eraser' ? 'eraser' : this._penSize() === 3 ? 'brush3' : this._penSize() === 2 ? 'brush2' : 'pixel';
+			const tool = this._penSize() === 3 ? 'brush3' : this._penSize() === 2 ? 'brush2' : 'pixel';
 			this._commit(tool, this.buffer.slice());
 			this.buffer = [];
 			this.preview = null;
@@ -129,7 +164,7 @@ export class Tools {
 		e.onOverlay = (ctx) => {
 			if (!this.preview || !this.preview.length) return;
 			ctx.globalAlpha = 0.55;
-			ctx.fillStyle = this.tool === 'eraser' ? (this.world.background || '#fff') : this.color;
+			ctx.fillStyle = this.color;
 			for (const [x, y] of this.preview) ctx.fillRect(e.offsetX + x * e.scale, e.offsetY + y * e.scale, e.scale, e.scale);
 			ctx.globalAlpha = 1;
 		};
@@ -138,7 +173,7 @@ export class Tools {
 	_flood(x, y) {
 		const target = this.engine.colorAt(x, y);
 		if (target === this.color) return [];
-		const w = this.world.width, h = this.world.height;
+		const w = this.world.infinite ? 100000 : this.world.width, h = this.world.infinite ? 100000 : this.world.height;
 		const out = [], seen = new Set(), stack = [[x, y]];
 		while (stack.length && out.length < 4096) {
 			const [cx, cy] = stack.pop();
@@ -156,7 +191,7 @@ export class Tools {
 	_commit(tool, cells) {
 		cells = cells.filter((c) => this._inBounds(c));
 		if (!cells.length) return;
-		const color = tool === 'eraser' ? (this.world.background || '#ffffff') : this.color;
+		const color = this.color;
 		this.engine.applyPixels(cells.map((c) => [c[0], c[1], color]));
 		const max = Math.max(1, this._toolCfg(tool).maxSize || 1);
 		for (let i = 0; i < cells.length; i += max) this.queue.push({ tool, cells: cells.slice(i, i + max) });
@@ -192,7 +227,8 @@ export class Tools {
 		const avail = Object.keys(TOOL_META).filter((t) => t === 'picker' || (this.world.tools[t] && this.world.tools[t].enabled));
 		for (const t of avail) {
 			const meta = TOOL_META[t];
-			const b = el('button', { class: 'tool' + (t === this.tool ? ' active' : ''), title: meta.label, 'data-tool': t, onclick: () => { this.tool = t; this.renderTools(container); } }, meta.icon);
+			const b = el('button', { class: 'tool' + (t === this.tool ? ' active' : ''), title: meta.label, 'data-tool': t, onclick: () => { this.tool = t; this.renderTools(container); } });
+			b.appendChild(toolIcon(t, t === this.tool));
 			container.appendChild(b);
 		}
 	}
