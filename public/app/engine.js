@@ -1,5 +1,5 @@
 // Canvas-движок PixelFront: рендер холста, зум к курсору, панорамирование, миникарта.
-// Оптимизировано: рендер только установленных пикселей (разреженно, с отсечением по
+// Оптимизировано: рендер только установленных пикселей (разрежённо, с отсечением по
 // вьюпорту), rAF-коалесинг кадров и офскрин-буфер миникарты. Бесконечный холст с
 // центральной зоной спавна.
 export class PixelEngine {
@@ -37,6 +37,7 @@ export class PixelEngine {
 		this._miniScale = 1;
 		this._miniOx = 0;
 		this._miniOy = 0;
+		this._mbx0 = 0; this._mby0 = 0; this._mbx1 = 1000; this._mby1 = 1000;
 		this._bind();
 		this.resize();
 	}
@@ -195,7 +196,8 @@ export class PixelEngine {
 			ctx.strokeRect(this.offsetX + this.hover.x * s, this.offsetY + this.hover.y * s, s, s);
 		}
 
-		this._drawMinimap(cMinX, cMinY, cMaxX, cMaxY);
+		// Миникарта рисуется отдельно через _drawMinimap()
+		this._drawMinimap();
 	}
 
 	_drawZone(ctx) {
@@ -222,44 +224,96 @@ export class PixelEngine {
 		ctx.restore();
 	}
 
-	// Офскрин-буфер миникарты пересобирается только при изменении пикселей,
-	// а не на каждом кадре панорамирования.
-	_rebuildMinimap() {
-		if (!this.mctx) return;
+	// Офскрин-буфер миникарты. Область отображения = объединение зоны спавна +
+	// всех пикселей + текущего вьюпорта. Перестраивается только при изменении
+	// пикселей или при выходе вьюпорта за текущие границы.
+	_rebuildMinimap(vx0, vy0, vx1, vy1) {
+		if (!this.mctx || !this.world) return;
 		const mw = this.minimap.width, mh = this.minimap.height;
+		const sp = this._spawn();
+		// Вычисляем границы: зона спавна + все пиксели + вьюпорт
+		let bx0 = 0, by0 = 0, bx1 = sp || 1, by1 = sp || 1;
+		for (const [key] of this.pixels) {
+			const ci = key.indexOf(':');
+			const px = +key.slice(0, ci), py = +key.slice(ci + 1);
+			if (px < bx0) bx0 = px;
+			if (py < by0) by0 = py;
+			if (px + 1 > bx1) bx1 = px + 1;
+			if (py + 1 > by1) by1 = py + 1;
+		}
+		if (vx0 !== undefined) {
+			bx0 = Math.min(bx0, vx0); by0 = Math.min(by0, vy0);
+			bx1 = Math.max(bx1, vx1); by1 = Math.max(by1, vy1);
+		}
+		// Паддинг 6% + 8 пикселей с каждой стороны
+		const pw = (bx1 - bx0) * 0.06 + 8, ph = (by1 - by0) * 0.06 + 8;
+		bx0 = Math.max(0, Math.floor(bx0 - pw));
+		by0 = Math.max(0, Math.floor(by0 - ph));
+		bx1 = Math.ceil(bx1 + pw);
+		by1 = Math.ceil(by1 + ph);
+		this._mbx0 = bx0; this._mby0 = by0; this._mbx1 = bx1; this._mby1 = by1;
+		const s = Math.min(mw / (bx1 - bx0), mh / (by1 - by0));
+		this._miniScale = s;
+		this._miniOx = (mw - (bx1 - bx0) * s) / 2;
+		this._miniOy = (mh - (by1 - by0) * s) / 2;
 		if (!this._mini) this._mini = document.createElement('canvas');
 		this._mini.width = mw; this._mini.height = mh;
 		const b = this._mini.getContext('2d');
 		b.clearRect(0, 0, mw, mh);
-		const inf = !!this.world.infinite;
-		const w = inf ? this._spawn() : this.world.width;
-		const h = inf ? this._spawn() : this.world.height;
-		const s = Math.min(mw / w, mh / h);
-		this._miniScale = s;
-		this._miniOx = (mw - w * s) / 2;
-		this._miniOy = (mh - h * s) / 2;
-		b.fillStyle = this.world.background || '#fff';
-		b.fillRect(this._miniOx, this._miniOy, w * s, h * s);
+		// Фон зоны спавна
+		if (sp) {
+			const sx0 = this._miniOx + (0 - bx0) * s;
+			const sy0 = this._miniOy + (0 - by0) * s;
+			b.fillStyle = this.world.background || '#ffffff';
+			b.fillRect(sx0, sy0, sp * s, sp * s);
+			if (this.world.infinite) {
+				b.strokeStyle = 'rgba(37,99,235,0.30)';
+				b.lineWidth = 1;
+				b.strokeRect(sx0, sy0, sp * s, sp * s);
+			}
+		}
+		// Рисуем все пиксели
 		for (const [key, c] of this.pixels) {
-			const i = key.indexOf(':');
-			const x = +key.slice(0, i), y = +key.slice(i + 1);
-			if (x < 0 || y < 0 || x >= w || y >= h) continue;
+			const ci = key.indexOf(':');
+			const px = +key.slice(0, ci), py = +key.slice(ci + 1);
 			b.fillStyle = c;
-			b.fillRect(this._miniOx + x * s, this._miniOy + y * s, Math.max(1, s), Math.max(1, s));
+			b.fillRect(
+				this._miniOx + (px - bx0) * s,
+				this._miniOy + (py - by0) * s,
+				Math.max(1, s), Math.max(1, s)
+			);
 		}
 		this._miniDirty = false;
 	}
 
-	_drawMinimap(cMinX, cMinY, cMaxX, cMaxY) {
-		if (!this.mctx) return;
-		if (this._miniDirty || !this._mini) this._rebuildMinimap();
+	// Рисует миникарту каждый кадр. Индикатор вьюпорта считается
+	// напрямую из offsetX/offsetY/scale без отсечения — это
+	// устраняет искажение прямоугольника при панорамировании.
+	_drawMinimap() {
+		if (!this.mctx || !this.world) return;
+		// Точные мировые координаты вьюпорта (без клампинга!)
+		const vx0 = (0 - this.offsetX) / this.scale;
+		const vy0 = (0 - this.offsetY) / this.scale;
+		const vx1 = (this.viewW - this.offsetX) / this.scale;
+		const vy1 = (this.viewH - this.offsetY) / this.scale;
+		// Перестраиваем если: данные изменились ИЛИ вьюпорт вышел за текущие границы
+		const outside = !this._mini || this._miniDirty
+			|| vx0 < this._mbx0 || vy0 < this._mby0
+			|| vx1 > this._mbx1 || vy1 > this._mby1;
+		if (outside) this._rebuildMinimap(vx0, vy0, vx1, vy1);
 		const mc = this.mctx, mw = this.minimap.width, mh = this.minimap.height;
 		mc.clearRect(0, 0, mw, mh);
 		mc.drawImage(this._mini, 0, 0);
+		// Индикатор вьюпорта — рисуется каждый кадр без кэша, без clamp
 		const s = this._miniScale, ox = this._miniOx, oy = this._miniOy;
+		const bx0 = this._mbx0, by0 = this._mby0;
+		const rx = ox + (vx0 - bx0) * s;
+		const ry = oy + (vy0 - by0) * s;
+		const rw = Math.max(2, (vx1 - vx0) * s);
+		const rh = Math.max(2, (vy1 - vy0) * s);
 		mc.strokeStyle = '#2563eb';
-		mc.lineWidth = 1;
-		mc.strokeRect(ox + cMinX * s, oy + cMinY * s, (cMaxX - cMinX + 1) * s, (cMaxY - cMinY + 1) * s);
+		mc.lineWidth = 1.5;
+		mc.strokeRect(Math.round(rx), Math.round(ry), Math.round(rw), Math.round(rh));
 	}
 
 	_emitView() {
