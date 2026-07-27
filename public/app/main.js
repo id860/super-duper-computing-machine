@@ -71,6 +71,7 @@ const panels = {};
 
 panels.chat = async (root) => {
 	root.innerHTML = '';
+	if (!app.world) { root.appendChild(el('p', { class: 'muted small' }, 'Мир не загружен.')); return; }
 	const list = el('div', { class: 'chat-list', id: 'chatList' });
 	const input = el('input', { class: 'input', placeholder: 'Сообщение…', maxlength: '240' });
 	const send = async () => { const t = input.value.trim(); if (!t) return; input.value = ''; try { await api.chatPost(app.world.id, t); } catch (err) { toast(err.message, 'error'); } };
@@ -123,6 +124,7 @@ panels.catalog = async (root) => {
 
 panels.rank = async (root) => {
 	root.innerHTML = '<p class="muted small">Загрузка…</p>';
+	if (!app.world) { root.innerHTML = ''; root.appendChild(el('p', { class: 'muted small' }, 'Мир не загружен.')); return; }
 	try {
 		const [g, l] = await Promise.all([api.leaderboard(), api.localLeaderboard(app.world.id).catch(() => ({ local: [] }))]);
 		root.innerHTML = '';
@@ -359,7 +361,12 @@ async function openWorld(id) {
 		if (api.state.me) api.energy(id).then((e) => updateEnergy(e.energy)).catch(() => {});
 		const activeTab = document.querySelector('.tab.active');
 		switchTab(activeTab ? activeTab.dataset.tab : 'chat');
-	} catch (err) { toast(err.message || 'Мир недоступен', 'error'); }
+	} catch (err) {
+		toast(err.message || 'Мир недоступен', 'error');
+		// Без загруженного мира панели обращаются к app.world.id и падают
+		// (Cannot read properties of null). Откатываемся на официальный мир.
+		if (!app.world && id !== 'official') await openWorld('official');
+	}
 }
 
 function reloadWorld() { if (app.world) openWorld(app.world.id); }
@@ -377,14 +384,16 @@ function connectStream(worldId) {
 function startEnergyPoll() {
 	if (app.energyTimer) clearInterval(app.energyTimer);
 	if (!api.state.me) return;
-	app.energyTimer = setInterval(async () => { try { const e = await api.energy(app.world.id); updateEnergy(e.energy); } catch {} }, 5000);
+	app.energyTimer = setInterval(async () => { if (!app.world) return; try { const e = await api.energy(app.world.id); updateEnergy(e.energy); } catch {} }, 5000);
 }
 
 function parseHash() {
 	const h = location.hash.replace(/^#/, '');
 	if (!h.startsWith('world/')) return null;
 	const parts = h.split('/');
-	return { id: parts[1], x: +parts[2], y: +parts[3], z: +parts[4] };
+	const id = (parts[1] || '').trim();
+	if (!id) return null;
+	return { id, x: +parts[2], y: +parts[3], z: +parts[4] };
 }
 
 let hashTimer = null;

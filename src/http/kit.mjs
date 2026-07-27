@@ -43,7 +43,7 @@ export function send(res, status, body, headers = {}) {
 
 export const ok = (res, data, headers) => send(res, 200, data ?? { ok: true }, headers);
 export const fail = (res, error) => {
-	const status = error instanceof HttpError ? error.status : 500;
+	const status = (error instanceof HttpError || Number.isInteger(error?.status)) ? error.status : 500;
 	if (status >= 500) console.error(error);
 	send(res, status, { error: error.message || 'Ошибка сервера' });
 };
