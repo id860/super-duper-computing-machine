@@ -20,5 +20,5 @@ test('chunk index builds buckets and applies live pixel updates', () => {
 	assert.equal(chunks.get('2:0').get('512:5').c, '#000000');
 
 	index.applyPixels('world', [[1, 2, '#ffffff']]);
-	assert.equal(chunks.get('0:0').has('1:2'), false);
+	assert.equal(chunks.has('0:0'), false);
 });
