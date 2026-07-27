@@ -20,6 +20,7 @@ jobs:
           node --check worker-v3.mjs
           node --check src/http/api.mjs
           node --check src/http/chunks.mjs
+          node --check src/http/metrics.mjs
           node --check src/http/world-bootstrap.mjs
           node --check src/http/player-preferences.mjs
           node --check src/core/model.mjs
@@ -35,6 +36,7 @@ jobs:
           node --check public/app/chunk-prefetch.js
           node --check public/app/tile-grid.js
           node --check public/app/render-tiles.js
+          node --check public/app/minimap-nav.js
           node --check public/app/experience-patch.js
       - name: Verify unit, API and load contracts
         run: npm test
