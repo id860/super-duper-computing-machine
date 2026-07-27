@@ -116,7 +116,21 @@ panels.catalog = async (root) => {
 		} catch (err) { grid.innerHTML = ''; grid.appendChild(el('p', { class: 'muted small' }, err.message)); }
 	};
 	for (const [k, label] of cats) tabs.appendChild(el('button', { class: 'subtab' + (k === active ? ' active' : ''), onclick: (e) => { active = k; tabs.querySelectorAll('.subtab').forEach((b) => b.classList.remove('active')); e.target.classList.add('active'); load(); } }, label));
+
 	root.appendChild(el('button', { class: 'btn btn-primary full', onclick: () => { if (!api.state.me) return authModal(api, renderMe); openWizard(api, api.state.config, (w) => location.hash = 'world/' + w.id); } }, '+ Создать мир'));
+
+	// Официальный мир — всегда первым
+	root.appendChild(el('h4', {}, 'Официальный мир'));
+	root.appendChild(el('div', { class: 'card card-official', onclick: () => location.hash = 'world/official' },
+		el('div', { class: 'card-icon' }, '🌍'),
+		el('div', { class: 'card-body' },
+			el('div', { class: 'card-title' }, 'Official World'),
+			el('div', { class: 'card-meta' }, 'Бесконечный · 100 000 × 100 000 · Глобальный рейтинг'),
+			el('div', { class: 'muted small' }, 'XP ×2 в зоне спавна 1000×1000')
+		)
+	));
+
+	root.appendChild(el('h4', {}, 'Миры сообщества'));
 	root.appendChild(tabs);
 	root.appendChild(grid);
 	load();
@@ -363,8 +377,6 @@ async function openWorld(id) {
 		switchTab(activeTab ? activeTab.dataset.tab : 'chat');
 	} catch (err) {
 		toast(err.message || 'Мир недоступен', 'error');
-		// Без загруженного мира панели обращаются к app.world.id и падают
-		// (Cannot read properties of null). Откатываемся на официальный мир.
 		if (!app.world && id !== 'official') await openWorld('official');
 	}
 }
@@ -425,6 +437,17 @@ async function boot() {
 	$('zoomOut').onclick = () => app.engine.zoomButton(1 / 1.25);
 	$('zoomFit').onclick = () => app.engine.fit();
 	document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+	// Кнопка сворачивания / разворачивания правой панели
+	const sidebar = $('sidebar');
+	const sidebarToggle = el('button', { id: 'sidebarToggle', title: 'Свернуть панель' }, '›');
+	sidebarToggle.addEventListener('click', () => {
+		const collapsed = sidebar.classList.toggle('sidebar--collapsed');
+		sidebarToggle.textContent = collapsed ? '‹' : '›';
+		sidebarToggle.title = collapsed ? 'Развернуть панель' : 'Свернуть панель';
+		app.engine.resize();
+	});
+	sidebar.parentNode.insertBefore(sidebarToggle, sidebar);
 
 	renderMe();
 	window.addEventListener('hashchange', () => { const h = parseHash(); if (h && (!app.world || h.id !== app.world.id)) openWorld(h.id); else if (h && !Number.isNaN(h.x)) app.engine.center(h.x, h.y, h.z); });
