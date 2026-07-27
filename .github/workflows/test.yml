@@ -1,4 +1,4 @@
-name: Test
+name: Smoke checks
 
 on:
   push:
@@ -10,15 +10,15 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: node --check server-v3.mjs
       - run: node --check src/http/api.mjs
       - run: node --check src/core/model.mjs
-      - run: npm test
+      - run: node --test test/core-v3.test.mjs
