@@ -1,0 +1,27 @@
+/* Styles for the extended cosmetics catalogue. Kept in its own sheet so the
+   wardrobe can grow without touching the core experience styles. */
+
+.chat-nick.cosmetic-nick_ice { color: #38bdf8; text-shadow: 0 0 6px rgba(56, 189, 248, .45); }
+.chat-nick.cosmetic-nick_mint { color: #34d399; }
+.chat-nick.cosmetic-nick_gradient { background: linear-gradient(90deg, #6366f1, #ec4899); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.chat-nick.cosmetic-nick_gold { color: #d4a017; text-shadow: 0 0 6px rgba(212, 160, 23, .35); }
+
+.chat-nick[data-badge='badge_architect']::after { content: '\25e9'; margin-left: 4px; color: #6366f1; }
+.chat-nick[data-badge='badge_guardian']::after { content: '\26e8'; margin-left: 4px; color: #0ea5e9; }
+
+.chat-nick[data-trail='trail_rainbow']::before { content: '\223f'; margin-right: 4px; background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #3b82f6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.chat-nick[data-trail='trail_ember']::before { content: '\25cf'; margin-right: 4px; color: #f97316; }
+
+.chat-nick[data-cursor='cursor_pixel']::before { content: '\25a0'; margin-right: 4px; color: var(--accent, #2563eb); font-size: 9px; }
+.chat-nick[data-cursor='cursor_halo']::before { content: '\25cb'; margin-right: 4px; color: #a855f7; }
+
+.chat-msg[data-cosmetic-frame='frame_forest'] { border-left: 2px solid #22c55e; padding-left: 6px; }
+.chat-msg[data-cosmetic-frame='frame_crimson'] { border-left: 2px solid #dc2626; padding-left: 6px; }
+
+/* Wardrobe grid in the profile panel. */
+.wardrobe { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.wardrobe-item { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--line, #e5e7eb); border-radius: 8px; background: var(--panel, #fff); text-align: left; cursor: pointer; }
+.wardrobe-item:hover { border-color: var(--accent, #2563eb); }
+.wardrobe-item[data-active='true'] { border-color: var(--accent, #2563eb); box-shadow: inset 0 0 0 1px var(--accent, #2563eb); }
+.wardrobe-slot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, #6b7280); }
+.wardrobe-preview { display: flex; align-items: center; gap: 6px; min-height: 20px; font-weight: 600; }
