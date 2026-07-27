@@ -9,54 +9,11 @@
 	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230d0f14'/%3E%3Crect x='3' y='3' width='4' height='4' fill='%234ea1ff'/%3E%3Crect x='9' y='3' width='4' height='4' fill='%23e5d900'/%3E%3Crect x='3' y='9' width='4' height='4' fill='%2302be01'/%3E%3Crect x='9' y='9' width='4' height='4' fill='%23e50000'/%3E%3C/svg%3E" />
 </head>
 <body>
-	<header id="topbar">
-		<div class="brand"><span class="brand-mark">▣</span> PixelFront <span class="brand-sub">Worlds</span></div>
-		<div class="world-info">
-			<span id="worldType" class="badge badge-official">ОФИЦИАЛЬНЫЙ</span>
-			<span id="worldName">…</span>
-		</div>
-		<div class="energy">
-			<div class="energy-bar"><div id="energyFill" class="energy-fill"></div></div>
-			<span id="energyText" class="small">—</span>
-		</div>
-		<div id="userBox" class="user-box"></div>
-	</header>
-
-	<main id="layout">
-		<aside id="toolbar">
-			<div id="tools" class="tools"></div>
-			<div class="divider"></div>
-			<div id="palette" class="palette"></div>
-		</aside>
-
-		<section id="stage">
-			<canvas id="canvas"></canvas>
-			<div id="notice" class="notice-bar"></div>
-			<div class="stage-overlay">
-				<canvas id="minimap" width="160" height="120"></canvas>
-				<div class="zoom-ctrl">
-					<button id="zoomIn" class="icon-btn" title="Приблизить">+</button>
-					<button id="zoomOut" class="icon-btn" title="Отдалить">−</button>
-					<button id="zoomFit" class="icon-btn" title="Вся карта">□</button>
-				</div>
-				<div id="coords" class="coords">0, 0</div>
-			</div>
-		</section>
-
-		<aside id="sidebar">
-			<nav class="tabs">
-				<button class="tab active" data-tab="chat">Чат</button>
-				<button class="tab" data-tab="catalog">Каталог</button>
-				<button class="tab" data-tab="rank">Рейтинг</button>
-				<button class="tab" data-tab="quests">Задания</button>
-				<button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Админ</button>
-			</nav>
-			<div id="panelBody" class="panel-body"></div>
-		</aside>
-	</main>
-
+	<header id="topbar"><div class="brand"><span class="brand-mark">▣</span> PixelFront <span class="brand-sub">Worlds</span></div><div class="world-info"><span id="worldType" class="badge badge-official">ОФИЦИАЛЬНЫЙ</span><span id="worldName">…</span></div><div class="energy"><div class="energy-bar"><div id="energyFill" class="energy-fill"></div></div><span id="energyText" class="small">—</span></div><div id="userBox" class="user-box"></div></header>
+	<main id="layout"><aside id="toolbar"><div id="tools" class="tools"></div><div class="divider"></div><div id="palette" class="palette"></div></aside><section id="stage"><canvas id="canvas"></canvas><div id="notice" class="notice-bar"></div><div class="stage-overlay"><canvas id="minimap" width="160" height="120"></canvas><div class="zoom-ctrl"><button id="zoomIn" class="icon-btn" title="Приблизить">+</button><button id="zoomOut" class="icon-btn" title="Отдалить">−</button><button id="zoomFit" class="icon-btn" title="Вся карта">□</button></div><div id="coords" class="coords">0, 0</div></div></section><aside id="sidebar"><nav class="tabs"><button class="tab active" data-tab="chat">Чат</button><button class="tab" data-tab="catalog">Каталог</button><button class="tab" data-tab="rank">Рейтинг</button><button class="tab" data-tab="quests">Задания</button><button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Админ</button></nav><div id="panelBody" class="panel-body"></div></aside></main>
 	<div id="toasts"></div>
 	<script type="module" src="./app/interaction-patch.js"></script>
+	<script type="module" src="./app/viewport-cache.js"></script>
 	<script type="module" src="./app/main.js"></script>
 </body>
 </html>
