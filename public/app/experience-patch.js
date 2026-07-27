@@ -1,17 +1,51 @@
 // Player-experience layer: sidebar, cosmetics, quests/events and spawn preference.
 // The viewport chunk loader now lives in chunk-prefetch.js; this file must not
-// override it again or the progressive centre-first loading would be lost.
+// override it again or the batched viewport loading would be lost.
 import { PixelEngine } from './engine.js';
 import { api } from './api.js';
 import { el, modal, toast } from './ui.js';
 
 const FINE_CHUNK_SIZE = 86;
 const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
+const MARK_SLOTS = ['badge', 'trail', 'cursor'];
 const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок', trail: 'След', cursor: 'Курсор' };
+
+// Grid tiers: zoomed far out the canvas shows whole chunks, mid zoom splits
+// each chunk into nine blocks, and close up the engine's own pixel grid takes
+// over. The steps give a sense of scale instead of one flat colour field.
+const CHUNK_GRID_MAX_SCALE = 1.6;
+const SUBCHUNK_MIN_SCALE = 0.45;
+
+function drawGridLines(ctx, engine, step, color) {
+	const span = step * engine.scale;
+	if (span < 6) return;
+	const first = Math.floor(-engine.offsetX / span), last = Math.floor((engine.viewW - engine.offsetX) / span);
+	const top = Math.floor(-engine.offsetY / span), bottom = Math.floor((engine.viewH - engine.offsetY) / span);
+	ctx.strokeStyle = color;
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	for (let i = first; i <= last + 1; i++) {
+		const x = Math.floor(engine.offsetX + i * span) + 0.5;
+		ctx.moveTo(x, 0); ctx.lineTo(x, engine.viewH);
+	}
+	for (let j = top; j <= bottom + 1; j++) {
+		const y = Math.floor(engine.offsetY + j * span) + 0.5;
+		ctx.moveTo(0, y); ctx.lineTo(engine.viewW, y);
+	}
+	ctx.stroke();
+}
+
 const originalSetWorld = PixelEngine.prototype.setWorld;
 PixelEngine.prototype.setWorld = function (...args) {
 	originalSetWorld.apply(this, args); window.__pixelEngine = this; this.showSpawnZone = localStorage.getItem('pf.hideSpawnZone') !== '1';
-	this.onOverlay = (ctx) => { if (this.scale > 1.5 || !this._loadedChunks) return; ctx.save(); ctx.strokeStyle = 'rgba(37,99,235,.16)'; ctx.lineWidth = 1; for (const key of this._loadedChunks) { const [cx, cy] = key.split(':').map(Number), size = FINE_CHUNK_SIZE * this.scale; ctx.strokeRect(this.offsetX + cx * size, this.offsetY + cy * size, size, size); } ctx.restore(); };
+	this.onOverlay = (ctx) => {
+		if (!this.world?.infinite || this.scale > CHUNK_GRID_MAX_SCALE) return;
+		ctx.save();
+		drawGridLines(ctx, this, FINE_CHUNK_SIZE, 'rgba(37,99,235,.18)');
+		// Each chunk splits into 3×3 blocks once the player zooms in far enough.
+		if (this.scale >= SUBCHUNK_MIN_SCALE) drawGridLines(ctx, this, FINE_CHUNK_SIZE / 3, 'rgba(37,99,235,.09)');
+		ctx.restore();
+	};
 };
 PixelEngine.prototype._drawZone = function (ctx) { const sp = this._spawn(); if (!sp || !this.world?.infinite || this.showSpawnZone === false) return; const x = this.offsetX, y = this.offsetY, size = sp * this.scale; ctx.save(); ctx.fillStyle = 'rgba(37,99,235,.045)'; ctx.fillRect(x, y, size, size); ctx.fillStyle = 'rgba(37,99,235,.32)'; ctx.font = '600 11px system-ui'; const lx = Math.min(Math.max(x + 8, 8), this.viewW - 52), ly = Math.min(Math.max(y + 16, 16), this.viewH - 8); ctx.fillText(`${sp}×${sp}`, lx, ly); ctx.restore(); };
 
@@ -27,23 +61,59 @@ const cosmetics = [
 // ---------- Cosmetics in chat (every author, not only the current player) ----------
 const chatCosmetics = new Map(); // nick -> equipped slots
 const pendingLookups = new Set();
+let myCosmetics = {};
+
+// Badges, trails and cursors are rendered as separate marks in front of the
+// nickname instead of CSS pseudo-elements: several slots can be worn at once
+// (::before could only ever show one) and the icons no longer collide with the
+// message text. The colon after the nick is dropped as well, so a mark is
+// always followed by clean spacing.
+function decorateNode(node, active, nick) {
+	node.textContent = nick;
+	node.className = 'chat-nick' + (active.nick ? ` cosmetic-${active.nick}` : '');
+	const host = node.parentNode;
+	if (!host) return;
+	host.querySelectorAll(':scope > .chat-mark').forEach((mark) => mark.remove());
+	for (const slot of MARK_SLOTS) {
+		if (!active[slot]) continue;
+		const mark = el('span', { class: 'chat-mark' });
+		mark.dataset.mark = active[slot];
+		host.insertBefore(mark, node);
+	}
+}
 
 function decorateChat() {
 	document.querySelectorAll('.chat-msg').forEach((row) => {
 		const node = row.querySelector('.chat-nick');
 		if (!node) return;
-		const nick = node.textContent.replace(/:\s*$/, '').trim();
+		const nick = (node.dataset.nick || node.textContent).replace(/:\s*$/, '').trim();
 		if (!nick) return;
+		node.dataset.nick = nick;
 		const active = chatCosmetics.get(nick);
 		if (!active) { if (!pendingLookups.has(nick)) lookupCosmetics(nick); return; }
-		node.className = 'chat-nick' + (active.nick ? ` cosmetic-${active.nick}` : '');
-		for (const slot of SLOTS) {
-			if (slot === 'nick') continue;
-			if (active[slot]) node.dataset[slot] = active[slot];
-			else delete node.dataset[slot];
-		}
+		decorateNode(node, active, nick);
 		row.dataset.cosmeticFrame = active.frame || '';
 	});
+}
+
+// The header badge must reflect the equipped items right after a reload, not
+// only once the profile modal has been opened.
+function decorateHeader() {
+	const box = document.querySelector('#userBox .me');
+	const node = box?.querySelector('.me-nick');
+	const nick = api.state.me?.nick;
+	if (!box || !node || !nick) return;
+	node.dataset.nick = nick;
+	node.textContent = nick;
+	node.className = 'me-nick chat-nick' + (myCosmetics.nick ? ` cosmetic-${myCosmetics.nick}` : '');
+	box.querySelectorAll(':scope > .chat-mark').forEach((mark) => mark.remove());
+	for (const slot of MARK_SLOTS) {
+		if (!myCosmetics[slot]) continue;
+		const mark = el('span', { class: 'chat-mark' });
+		mark.dataset.mark = myCosmetics[slot];
+		box.insertBefore(mark, node);
+	}
+	box.dataset.cosmeticFrame = myCosmetics.frame || '';
 }
 
 async function lookupCosmetics(nick) {
@@ -75,14 +145,40 @@ api.stream = (worldId, handlers = {}) => {
 	return originalStream(worldId, handlers);
 };
 
-function applyCosmetics(active = {}) { for (const slot of SLOTS) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || ''; const nick = api.state.me?.nick; if (nick) chatCosmetics.set(nick, { ...active }); decorateChat(); }
+// Completing a daily quest now notifies the player the same way achievements do.
+const originalOps = api.ops.bind(api);
+api.ops = async (worldId, payload) => {
+	const result = await originalOps(worldId, payload);
+	for (const quest of result?.reward?.quests || []) {
+		const reward = quest.reward ? ` · ${quest.reward.coins || 0} ◉, ${quest.reward.xp || 0} XP` : '';
+		toast(`Задание выполнено: ${quest.title || quest.id}${reward}`, 'success');
+	}
+	return result;
+};
+
+function applyCosmetics(active = {}) {
+	myCosmetics = { ...active };
+	for (const slot of SLOTS) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || '';
+	const nick = api.state.me?.nick;
+	if (nick) chatCosmetics.set(nick, { ...active });
+	decorateHeader();
+	decorateChat();
+}
+
+// Load the equipped set as soon as the player is known, so a page refresh shows
+// the cosmetics immediately instead of waiting for the profile to be opened.
+async function loadMyCosmetics() {
+	if (!api.state.me) return;
+	try { const pref = await api.get('/api/me/preferences'); applyCosmetics(pref.cosmetics?.equipped || {}); }
+	catch { /* Cosmetics are decorative; ignore transport errors. */ }
+}
 
 // Visual preview of a cosmetic item, reusing the chat decoration classes so the
 // wardrobe shows exactly what other players will see.
 function cosmeticPreview(key, slot, nick) {
-	const sample = el('span', { class: 'chat-nick' + (slot === 'nick' ? ` cosmetic-${key}` : '') }, nick || 'Игрок');
-	if (slot !== 'nick') sample.dataset[slot] = key;
-	const wrap = el('div', { class: 'wardrobe-preview' }, sample);
+	const wrap = el('div', { class: 'wardrobe-preview' });
+	if (MARK_SLOTS.includes(slot)) { const mark = el('span', { class: 'chat-mark' }); mark.dataset.mark = key; wrap.appendChild(mark); }
+	wrap.appendChild(el('span', { class: 'chat-nick' + (slot === 'nick' ? ` cosmetic-${key}` : '') }, nick || 'Игрок'));
 	if (slot === 'frame') wrap.dataset.cosmeticFrame = key;
 	return wrap;
 }
@@ -103,10 +199,21 @@ async function openPlayerProfile() {
 			const grid = el('div', { class: 'wardrobe' });
 			for (const [key, title, slot] of wearable) {
 				const card = el('button', { class: 'wardrobe-item', type: 'button' }, el('span', { class: 'wardrobe-slot' }, SLOT_TITLES[slot] || slot), cosmeticPreview(key, slot, api.state.me?.nick), el('span', { class: 'small' }, title));
+				card.dataset.slot = slot;
+				card.dataset.key = key;
 				card.dataset.active = String(active[slot] === key);
 				card.onclick = async () => {
-					try { const r = await api.post('/api/me/cosmetics', { key, slot }); active[slot] = r.cosmetics.equipped[slot]; applyCosmetics(active); grid.querySelectorAll('.wardrobe-item').forEach((node) => { node.dataset.active = 'false'; }); card.dataset.active = String(active[slot] === key); toast(active[slot] === key ? 'Предмет надет' : 'Предмет снят', 'success'); }
-					catch (err) { toast(err.message, 'error'); }
+					try {
+						const r = await api.post('/api/me/cosmetics', { key, slot });
+						active[slot] = r.cosmetics.equipped[slot];
+						applyCosmetics(active);
+						// Only the cards of this slot change state; items worn in other
+						// slots must stay highlighted.
+						grid.querySelectorAll(`.wardrobe-item[data-slot="${slot}"]`).forEach((node) => {
+							node.dataset.active = String(active[slot] === node.dataset.key);
+						});
+						toast(active[slot] === key ? 'Предмет надет' : 'Предмет снят', 'success');
+					} catch (err) { toast(err.message, 'error'); }
 				};
 				grid.appendChild(card);
 			}
@@ -154,5 +261,15 @@ function enhanceEvents() {
 	});
 }
 const originalEvents = api.events; api.events = async () => { const result = await originalEvents(); api.state._events = result.active || []; return result; };
-const observer = new MutationObserver(() => { const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs'); if (chat && toggle && tabs && toggle.previousElementSibling !== null) tabs.insertBefore(toggle, chat); const me = document.querySelector('#userBox .me'); if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; } decorateChat(); enhanceEvents(); });
+let cosmeticsRequested = false;
+const observer = new MutationObserver(() => {
+	const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs');
+	if (chat && toggle && tabs && toggle.previousElementSibling !== null) tabs.insertBefore(toggle, chat);
+	const me = document.querySelector('#userBox .me');
+	if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; }
+	if (api.state.me && !cosmeticsRequested) { cosmeticsRequested = true; loadMyCosmetics(); }
+	decorateHeader();
+	decorateChat();
+	enhanceEvents();
+});
 observer.observe(document.documentElement, { childList: true, subtree: true });
