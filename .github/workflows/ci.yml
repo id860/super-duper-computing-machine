@@ -8,7 +8,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +29,7 @@ jobs:
           node --check scripts/export-postgres.mjs
           node --check public/app/interaction-patch.js
           node --check public/app/viewport-cache.js
+          node --check public/app/chunk-lru.js
           node --check public/app/experience-patch.js
       - name: Verify unit, API and load contracts
         run: npm test

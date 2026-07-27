@@ -14,3 +14,8 @@ body[data-cosmetic-badge="badge_pioneer"] .me::after, .chat-nick[data-badge="bad
 body[data-cosmetic-badge="badge_creator"] .me::after, .chat-nick[data-badge="badge_creator"]::after { content: ' ✎'; color: #7c3aed; }
 body[data-cosmetic-trail="trail_spark"] #canvas { cursor: crosshair; }
 body[data-cosmetic-cursor="cursor_comet"] #canvas { cursor: cell; }
+/* Chat rows carry the author's cosmetics, so every player's loadout is visible. */
+.chat-msg[data-cosmetic-frame="frame_neon"] { border-left: 2px solid #a855f7; padding-left: 6px; }
+.chat-msg[data-cosmetic-frame="frame_aurora"] { border-left: 2px solid #22c55e; padding-left: 6px; }
+.chat-nick[data-trail="trail_spark"]::before { content: '✧ '; color: #eab308; }
+.chat-nick[data-cursor="cursor_comet"]::before { content: '☄ '; color: #0ea5e9; }
