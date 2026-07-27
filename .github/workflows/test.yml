@@ -20,5 +20,6 @@ jobs:
           node-version: 22
       - run: node --check server-v3.mjs
       - run: node --check src/http/api.mjs
+      - run: node --check src/http/chunks.mjs
       - run: node --check src/core/model.mjs
-      - run: node --test test/core-v3.test.mjs
+      - run: node --test test/core-v3.test.mjs test/chunks.test.mjs
