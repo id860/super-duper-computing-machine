@@ -1,0 +1,28 @@
+// Optional PostgreSQL mirror. JSON stays authoritative until a controlled read switch.
+import { CHUNK_SIZE } from '../http/chunks.mjs';
+
+const keyFor = (x, y) => `${Math.floor(x / CHUNK_SIZE)}:${Math.floor(y / CHUNK_SIZE)}`;
+export async function createPostgresMirror(connectionString) {
+	if (!connectionString) return null;
+	const { Pool } = await import('pg');
+	const pool = new Pool({ connectionString, max: Number(process.env.POSTGRES_POOL_SIZE || 4) });
+	await pool.query('SELECT 1');
+	return {
+		async write(db) {
+			const client = await pool.connect();
+			try {
+				await client.query('BEGIN');
+				for (const world of Object.values(db.worlds || {})) {
+					const payload = { ...world, pixels: undefined, pixelHistory: undefined };
+					await client.query('INSERT INTO worlds (id, payload, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()', [world.id, JSON.stringify(payload)]);
+					const buckets = new Map();
+					for (const [cellKey, cell] of Object.entries(world.pixels || {})) { const i = cellKey.indexOf(':'); const x = Number(cellKey.slice(0, i)), y = Number(cellKey.slice(i + 1)), key = keyFor(x, y); let cells = buckets.get(key); if (!cells) buckets.set(key, (cells = {})); cells[cellKey] = cell; }
+					await client.query('DELETE FROM world_chunks WHERE world_id = $1', [world.id]);
+					for (const [key, cells] of buckets) { const [x, y] = key.split(':').map(Number); await client.query('INSERT INTO world_chunks (world_id, chunk_x, chunk_y, cells, revision) VALUES ($1, $2, $3, $4::jsonb, $5)', [world.id, x, y, JSON.stringify(cells), Date.now()]); }
+				}
+				await client.query('COMMIT');
+			} catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { client.release(); }
+		},
+		async close() { await pool.end(); }
+	};
+}

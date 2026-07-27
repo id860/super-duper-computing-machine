@@ -10,7 +10,6 @@
     "test": "node --test test/core-v3.test.mjs test/chunks.test.mjs test/chunk-lru.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs test/api-chunks.test.mjs test/export-postgres.test.mjs",
     "export:postgres": "node scripts/export-postgres.mjs"
   },
-  "engines": {
-    "node": ">=20"
-  }
+  "dependencies": { "pg": "^8.13.1" },
+  "engines": { "node": ">=20" }
 }
