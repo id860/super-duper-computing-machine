@@ -17,6 +17,7 @@ jobs:
       - name: Validate server and scale modules
         run: |
           node --check server-v3.mjs
+          node --check worker-v3.mjs
           node --check src/http/api.mjs
           node --check src/http/chunks.mjs
           node --check src/http/world-bootstrap.mjs
@@ -29,7 +30,7 @@ jobs:
           node --check public/app/interaction-patch.js
           node --check public/app/viewport-cache.js
           node --check public/app/experience-patch.js
-      - name: Verify unit and live API contracts
+      - name: Verify unit, API and load contracts
         run: npm test
   docker:
     runs-on: ubuntu-latest
