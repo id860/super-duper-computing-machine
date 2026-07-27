@@ -1,6 +1,4 @@
-/* PixelFront Worlds — флэт-минималистичный светлый интерфейс.
-   Без градиентов, теней-свечений и анимаций-трансформаций: чистые поверхности,
-   тонкие границы, один акцентный цвет. */
+/* PixelFront Worlds — флэт-минималистичный светлый интерфейс. */
 :root {
 	--bg: #ffffff;
 	--panel: #ffffff;
@@ -68,6 +66,10 @@ body {
 .palette { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; width: 100%; padding: 0 2px; }
 .swatch { width: 100%; aspect-ratio: 1; border-radius: 5px; border: 1px solid var(--line); cursor: pointer; padding: 0; }
 .swatch.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+
+/* Undo кнопка в тулбаре */
+#undoBtn { font-size: 16px; opacity: 0.55; transition: opacity .15s; }
+#undoBtn:hover { opacity: 1; }
 
 /* Stage */
 #stage { flex: 1; position: relative; overflow: hidden; background: #e9eaee; }
@@ -189,6 +191,46 @@ body {
 .toast-success { background: var(--ok); }
 .toast-error { background: var(--err); }
 .toast-info { background: var(--text); }
+
+/* Тултип автора пикселя */
+#pixelTooltip {
+	position: fixed;
+	z-index: 300;
+	background: rgba(20,23,28,0.90);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 600;
+	padding: 5px 10px;
+	border-radius: 6px;
+	pointer-events: none;
+	display: none;
+	white-space: nowrap;
+	box-shadow: 0 4px 14px rgba(20,23,28,.22);
+	letter-spacing: .01em;
+}
+
+/* Цветовой дот автора в тултипе */
+#pixelTooltip .tip-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-right: 6px;
+	vertical-align: middle;
+	border: 1px solid rgba(255,255,255,.3);
+}
+
+/* Комбинации клавиш */
+.hotkey-hint {
+	position: absolute;
+	bottom: 2px;
+	right: 3px;
+	font-size: 9px;
+	color: rgba(0,0,0,0.3);
+	line-height: 1;
+	pointer-events: none;
+}
+.tool.active .hotkey-hint { color: rgba(255,255,255,0.5); }
 
 @media (max-width: 860px) {
 	#sidebar { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; box-shadow: -8px 0 24px rgba(20,23,28,.12); }

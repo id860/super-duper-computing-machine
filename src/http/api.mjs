@@ -235,7 +235,6 @@ export function createApi({ store, sse, notify }) {
 		if (user.ban) throw new HttpError(403, 'Создание миров недоступно');
 		if (limited(`world:${user.id}`, 3600000, 6)) throw new HttpError(429, 'Слишком частое создание миров');
 		const body = await readJson(req);
-		// CAPTCHA: клиент решает арифметику; сервер сверяет подписанный токен и ограничивает частоту.
 		if (!verifyCaptcha(body.captchaToken, body.captcha)) throw new HttpError(400, 'Неверная CAPTCHA');
 		const owned = Object.values(db.worlds).filter((w) => w.ownerId === user.id && w.type === 'community' && !isArchived(w)).length;
 		if (owned >= (user.worldSlots || 1)) throw new HttpError(403, 'Достигнут лимит активных миров. Откройте слот за активность.');
@@ -292,6 +291,21 @@ export function createApi({ store, sse, notify }) {
 		ok(res, { pixels: pixelsPayload(world, since), at: now() });
 	});
 
+	// Информация об авторе пикселя по координатам
+	on('GET', '/api/worlds/:id/pixel-info', async (req, res, ctx, params) => {
+		const world = getWorld(params.id);
+		if (!isVisible(world, ctx.user, ctx.session)) throw new HttpError(403, 'Мир недоступен');
+		const url2 = new URL(req.url, 'http://localhost');
+		const x = int(url2.searchParams.get('x'), 0, 100000, -1);
+		const y = int(url2.searchParams.get('y'), 0, 100000, -1);
+		if (x < 0 || y < 0) throw new HttpError(400, 'Укажите корректные x и y');
+		const key = `${x}:${y}`;
+		const cell = world.pixels[key];
+		if (!cell) return ok(res, { empty: true, x, y });
+		const nick = db.users[cell.u]?.nick || null;
+		ok(res, { x, y, color: cell.c, nick, at: cell.at });
+	});
+
 	// Пакетная установка пикселей (один или несколько — инструменты).
 	on('POST', '/api/worlds/:id/ops', async (req, res, ctx, params) => {
 		const user = requireUser(ctx);
@@ -299,7 +313,6 @@ export function createApi({ store, sse, notify }) {
 		if (process.env.FEATURE_PIXELS === 'off') throw new HttpError(403, 'Рисование временно отключено');
 		if (!isVisible(world, ctx.user, ctx.session)) throw new HttpError(403, 'Мир недоступен');
 		if (isFrozen(world)) throw new HttpError(409, 'Мир заморожен или в архиве');
-		// Серверный лимит запросов в секунду даже при отключённом КД.
 		if (limited(`ops:${user.id}:${world.id}`, 1000, 30)) throw new HttpError(429, 'Слишком быстро');
 		const body = await readJson(req);
 		const tool = pick(TOOLS, body.tool, 'pixel');
@@ -317,7 +330,6 @@ export function createApi({ store, sse, notify }) {
 		if (config.dailyLimit && usage.count >= config.dailyLimit) throw new HttpError(429, 'Достигнут дневной лимит инструмента');
 		if (config.cooldownMs && now() - usage.lastAt < config.cooldownMs) throw new HttpError(429, 'Инструмент перезаряжается');
 
-		// Проверка защиты и тепловой карты.
 		let warned = false;
 		for (const [x, y] of cells) {
 			const check = checkProtection(world, user, x, y, tool);
@@ -336,7 +348,6 @@ export function createApi({ store, sse, notify }) {
 			state.at = state.at || now();
 		}
 
-		// Применяем пиксели.
 		const applied = [];
 		for (const [x, y] of cells) {
 			const c = color;
@@ -348,7 +359,6 @@ export function createApi({ store, sse, notify }) {
 		user.lastSeenAt = now();
 		touchWorld(world);
 
-		// Единый обработчик начислений.
 		const spawnCells = isOfficial(world) ? cells.filter(([x, y]) => x < world.spawn && y < world.spawn).length : cells.length;
 		const reward = awardPixels(user, world, cells.length, { colors: [color], area: cells.length, event: isOfficial(world), spawn: spawnCells });
 		if (isOfficial(world)) trackEventProgress(db, user, cells.length);
@@ -508,7 +518,6 @@ export function createApi({ store, sse, notify }) {
 		const body = await readJson(req);
 		let reverted = 0;
 		if (body.userId && body.windowMs) {
-			// Отменить все действия нарушителя за окно времени.
 			const since = now() - int(body.windowMs, 60000, 86400000, 1800000);
 			reverted = revertActor(world, body.userId, since, user);
 			if (body.ban && (world.members[body.userId])) world.members[body.userId].banned = true;
@@ -547,7 +556,6 @@ export function createApi({ store, sse, notify }) {
 			if (role === 'admin' && world.ownerId !== user.id) throw new HttpError(403, 'Назначать администраторов может только владелец');
 			member.role = role;
 		}
-		// Локальные наказания — только в пределах этого мира.
 		if (body.action === 'kick') member.banned = false, delete world.members[target.id];
 		if (body.action === 'ban') member.banned = true;
 		if (body.action === 'unban') member.banned = false;
@@ -750,7 +758,6 @@ function verifyCaptcha(tokenValue, answer) {
 	return safeEqual(String(tokenValue), sha(`${String(answer).trim()}:${CAPTCHA_SECRET}`));
 }
 
-// Максимальная координата для бесконечных миров (эффективно безграничный холст).
 const INFINITE_MAX = 100000;
 
 function normalizeCells(cells, world) {
@@ -860,7 +867,7 @@ function catalogCard(world) {
 		language: world.language,
 		tags: world.tags,
 		ageRating: world.ageRating,
-		size: `${world.width}×${world.height}`,
+		size: `${world.width}\u00d7${world.height}`,
 		energyMode: world.energy.mode,
 		ownerId: world.ownerId,
 		subscribers: world.catalog.subscribers.length,
@@ -876,7 +883,6 @@ function applyWorldSettings(world, body, user) {
 	const set = (key, value) => {
 		if (value !== undefined) world[key] = value;
 	};
-	// Официальный мир целиком редактирует только администратор; в мирах сообщества — владелец/админ.
 	const canRestricted = !isOfficial(world) || (user && user.role === 'admin');
 	if (typeof body.name === 'string') set('name', clean(body.name, 48) || world.name);
 	if (typeof body.description === 'string') set('description', clean(body.description, 240));
