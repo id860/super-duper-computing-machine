@@ -81,6 +81,8 @@ export const api = {
 	adminWorld: (id) => request('/api/admin/worlds/' + q(id)),
 	adminUsers: (search) => request('/api/admin/users' + (search ? '?q=' + q(search) : '')),
 	patchUser: (userId, body) => request('/api/admin/users/' + q(userId), { method: 'PATCH', body }),
+	// Информация об авторе пикселя по координатам
+	pixelInfo: (id, x, y) => request('/api/worlds/' + q(id) + '/pixel-info?x=' + x + '&y=' + y),
 	stream(worldId, handlers) {
 		const es = new EventSource('/api/stream?world=' + q(worldId));
 		for (const [event, fn] of Object.entries(handlers)) {

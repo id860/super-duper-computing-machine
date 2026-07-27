@@ -2,6 +2,7 @@
 // Оптимизировано: рендер только установленных пикселей (разрежённо, с отсечением по
 // вьюпорту), rAF-коалесинг кадров и офскрин-буфер миникарты. Бесконечный холст с
 // центральной зоной спавна.
+// pixels Map теперь хранит {c, nick, at} — для тултипа автора и истории.
 export class PixelEngine {
 	constructor(canvas, minimap) {
 		this.canvas = canvas;
@@ -48,23 +49,33 @@ export class PixelEngine {
 		this.maxScale = world.zoomMax || 40;
 		this.showGrid = world.grid !== false;
 		this.pixels.clear();
-		for (const p of pixels || []) this.pixels.set(p[0] + ':' + p[1], p[2]);
+		// Начальная загрузка: [x, y, color] — без автора (ник не известен)
+		for (const p of pixels || []) this.pixels.set(p[0] + ':' + p[1], { c: p[2] });
 		this._miniDirty = true;
 		this.fit();
 	}
 
-	applyPixels(list) {
+	// nick и at — опциональны; передаются из SSE-события (там есть `by`)
+	applyPixels(list, nick, at) {
 		if (!this.world) return;
+		const ts = at || null;
 		for (const p of list) {
-			if (p[2] === this.world.background) this.pixels.delete(p[0] + ':' + p[1]);
-			else this.pixels.set(p[0] + ':' + p[1], p[2]);
+			const key = p[0] + ':' + p[1];
+			if (p[2] === this.world.background) this.pixels.delete(key);
+			else this.pixels.set(key, { c: p[2], nick: nick || null, at: ts });
 		}
 		this._miniDirty = true;
 		this.draw();
 	}
 
 	colorAt(x, y) {
-		return this.pixels.get(x + ':' + y) || (this.world ? this.world.background : '#ffffff');
+		const cell = this.pixels.get(x + ':' + y);
+		return (cell ? cell.c : null) || (this.world ? this.world.background : '#ffffff');
+	}
+
+	// Возвращает полный объект пикселя {c, nick, at} или null
+	pixelInfoAt(x, y) {
+		return this.pixels.get(x + ':' + y) || null;
 	}
 
 	resize() {
@@ -108,7 +119,7 @@ export class PixelEngine {
 	}
 
 	worldToScreen(x, y) {
-		return { x: this.offsetX + x * this.scale, y: this.offsetY + y * this.scale };
+		return { x: this.offsetX + x * this.scale, y: this.offsetY + y * this.scale }; 
 	}
 
 	zoomAt(factor, sx, sy) {
@@ -161,7 +172,8 @@ export class PixelEngine {
 		// O(число пикселей), а не O(площадь) — на порядки быстрее при отдалении.
 		const cell = Math.ceil(s);
 		let lastColor = null;
-		for (const [key, c] of this.pixels) {
+		for (const [key, px] of this.pixels) {
+			const c = px.c;
 			const i = key.indexOf(':');
 			const x = +key.slice(0, i);
 			const y = +key.slice(i + 1);
@@ -211,7 +223,7 @@ export class PixelEngine {
 		ctx.setLineDash([6, 4]);
 		ctx.strokeRect(x0, y0, size, size);
 		ctx.setLineDash([]);
-		const label = sp + '×' + sp;
+		const label = sp + '\u00d7' + sp;
 		ctx.font = '600 12px system-ui, -apple-system, sans-serif';
 		const tw = Math.ceil(ctx.measureText(label).width);
 		const lx = Math.min(Math.max(x0 + 6, 6), this.viewW - tw - 12);
@@ -272,11 +284,11 @@ export class PixelEngine {
 				b.strokeRect(sx0, sy0, sp * s, sp * s);
 			}
 		}
-		// Рисуем все пиксели
-		for (const [key, c] of this.pixels) {
+		// Рисуем все пиксели (используем .c из объекта)
+		for (const [key, pxcell] of this.pixels) {
 			const ci = key.indexOf(':');
 			const px = +key.slice(0, ci), py = +key.slice(ci + 1);
-			b.fillStyle = c;
+			b.fillStyle = pxcell.c;
 			b.fillRect(
 				this._miniOx + (px - bx0) * s,
 				this._miniOy + (py - by0) * s,
@@ -346,7 +358,7 @@ export class PixelEngine {
 			if (this._pointers.size === 2 && this._pinch) { this._movePinch(); return; }
 			const p = this.screenToWorld(sx, sy);
 			this.hover = p;
-			if (this.onHover) this.onHover(p);
+			if (this.onHover) this.onHover(p, e);
 			if (this.panning && this.last) {
 				this.offsetX += sx - this.last.sx;
 				this.offsetY += sy - this.last.sy;
