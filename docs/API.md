@@ -18,11 +18,23 @@ Base URL: `/api`. Mutating requests require the `x-csrf-token` header returned b
 
 ### `GET /worlds/:id`
 
-Returns `{ world, pixels, arts }`.
-
-`world.infinite` identifies an unbounded world. Coordinates accepted by the current server range from `0` through `99,999` on both axes. `world.spawn` identifies the square spawn zone: for the official world this is `1000`, therefore its zone is `0…999 × 0…999`.
+Returns `{ world, pixels, arts }`. `world.infinite` identifies an unbounded world. Coordinates accepted by the current server range from `0` through `99,999` on both axes. `world.spawn` identifies the square spawn zone: for the official world this is `1000`, therefore its zone is `0…999 × 0…999`.
 
 `pixels` is a compact array of `[x, y, color]` records. Pixel author metadata is intentionally loaded separately.
+
+### `GET /worlds/:id?viewport=1`
+
+For an infinite world, returns metadata and arts with an empty `pixels` array plus `viewport: true`. This is the client bootstrap route: it prevents downloading the entire world before the canvas is usable. Finite worlds retain the normal full-world response.
+
+### `GET /worlds/:id/chunks?cx=<x>&cy=<y>&radius=<0..2>`
+
+Returns the requested **256 × 256** cell chunks:
+
+```json
+{ "chunkSize": 256, "center": { "x": 3, "y": 2 }, "radius": 1, "chunks": [{ "x": 3, "y": 2, "cells": [[769, 513, "#e50000"]] }] }
+```
+
+The server keeps an in-memory spatial index for each requested world and synchronizes it with accepted pixel operations. Empty chunks are returned too, allowing clients to cache them.
 
 ### `GET /worlds/:id/pixels?since=<timestamp>`
 
@@ -30,13 +42,7 @@ Returns pixels changed after the Unix-millisecond timestamp: `{ pixels, at }`.
 
 ### `GET /worlds/:id/pixel-info?x=<x>&y=<y>`
 
-Returns metadata for a painted cell:
-
-```json
-{ "x": 25, "y": 42, "color": "#e50000", "nick": "artist", "at": 1785140000000 }
-```
-
-For an unpainted cell the response is `{ "empty": true, "x": 25, "y": 42 }`.
+Returns metadata for a painted cell. For an unpainted cell the response is `{ "empty": true, "x": 25, "y": 42 }`.
 
 ### `POST /worlds`
 
@@ -50,34 +56,19 @@ Updates a world. Available to the owner, moderators or administrators; the offic
 
 ### `POST /worlds/:id/ops`
 
-Body:
-
 ```json
 { "tool": "pixel", "color": "#0083c7", "cells": [[25, 42]] }
 ```
 
-The server validates the active world palette, tool role, protected areas, energy, rate limits and coordinate range. Duplicate and out-of-range cells are ignored before application.
+The server validates the active world palette, tool role, protected areas, energy, rate limits and coordinate range. Duplicate and out-of-range cells are ignored before application. `brush2` permits four cells and `brush3` permits nine cells.
 
 Tools: `pixel`, `brush2`, `brush3`, `line`, `rect`, `fill`, `picker`, `move`, `copy`, `stamp`, `template`, `protect`, `restore`.
-
-The result includes `{ applied, energy, reward }`. In the official world, cells in the spawn zone yield the enhanced XP reward.
-
-### `GET /worlds/:id/energy`
-
-Returns `{ energy: { value, max, mode, stepMs, spentToday } }`.
 
 ## Realtime stream
 
 ### `GET /stream?world=:id`
 
-Connect using `EventSource`. Events are:
-
-- `pixels` — `{ tool, pixels: [[x,y,color]], by }`, where `by` is the author nickname;
-- `chat` — new chat message;
-- `lifecycle` — world state changed;
-- `reload` — client must reload the current world.
-
-Clients should apply `pixels` events immediately and cache `by` together with the cell to avoid a metadata request on hover.
+Connect using `EventSource`. `pixels` events contain `{ tool, pixels: [[x,y,color]], by }`; clients apply them immediately and cache `by` with the cell. Other events: `chat`, `lifecycle`, `reload`.
 
 ## Other endpoints
 
@@ -94,10 +85,6 @@ Clients should apply `pixels` events immediately and cache `by` together with th
 | `GET` | `/events` | active events |
 | `GET` | `/catalog?category=&q=` | community-world catalogue |
 
-## Administration
+## Administration and errors
 
-All `/admin/*` routes require staff privileges. Administrators can load and update world settings, search and change players, and resolve moderation queue items.
-
-## Errors
-
-Errors use `{ "error": "message" }`. Typical statuses: `400` invalid input, `401` unauthenticated, `403` access/CSRF failure, `404` missing resource, `409` state conflict and `429` rate limit.
+All `/admin/*` routes require staff privileges. Errors use `{ "error": "message" }`; common statuses are `400`, `401`, `403`, `404`, `409`, and `429`.
