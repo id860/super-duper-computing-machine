@@ -1,5 +1,8 @@
 import { isVisible } from '../core/rules.mjs'; import { ok } from './kit.mjs';
-export const CHUNK_SIZE = 86; const MAX_RADIUS = 2;
+// A zoomed-out viewport covers far more than a 5x5 block of chunks, so the
+// clamp allows 7x7 batches (602x602 cells) per request and the client fills the
+// screen with a handful of parallel calls instead of a chain of ring requests.
+export const CHUNK_SIZE = 86; const MAX_RADIUS = 3;
 // Read mode: 'auto' (default) uses PostgreSQL whenever the mirror is connected
 // and silently falls back to the in-memory JSON index on any error; 'json'
 // forces the legacy path; 'postgres' is kept as an explicit alias of 'auto'.
