@@ -1,5 +1,5 @@
 import { bresenham, rectCells } from './engine.js';
-import { el, toolIcon, TOOL_META, KEY_MAP } from './ui-base.js';
+import { el, toolIcon, TOOL_META, KEY_MAP, toast } from './ui-base.js';
 import { Tools } from './tools-core.js';
 Tools.prototype._bindHotkeys = function () {
 	window.addEventListener('keydown', (e) => {
