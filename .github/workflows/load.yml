@@ -1,7 +1,6 @@
 name: Load
 on:
   schedule:
-    # 03:20 UTC every day, outside the usual push traffic.
     - cron: '20 3 * * *'
   workflow_dispatch:
 permissions:
@@ -15,9 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
       - name: Chunk fan-out scenario
         run: node --test test/load-chunks.test.mjs
       - name: Chunk API and streaming contracts
-        run: node --test test/api-chunks.test.mjs test/chunks.test.mjs
+        run: node --test test/api-chunks.test.mjs test/chunks.test.mjs test/sse-replay.test.mjs test/chunk-consistency.test.mjs
       - name: Health and metrics counters
         run: node --test test/metrics.test.mjs

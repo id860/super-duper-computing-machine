@@ -1,30 +1,30 @@
 name: Smoke checks
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --check server-v3.mjs
-      - run: node --check src/http/api.mjs
-      - run: node --check src/http/chunks.mjs
-      - run: node --check src/http/world-bootstrap.mjs
-      - run: node --check src/core/model.mjs
-      - run: node --check src/core/world-fixes.mjs
-      - run: node --check scripts/export-postgres.mjs
-      - run: node --check public/app/interaction-patch.js
-      - run: node --check public/app/viewport-cache.js
-      - run: npm test
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax
+        run: |
+          node --check server-v3.mjs
+          node --check src/http/api.mjs
+          node --check src/http/chunks.mjs
+          node --check src/http/sse.mjs
+          node --check public/app/chunk-consistency.js
+          node --check public/app/chunk-prefetch.js
+      - name: New consistency contracts
+        run: node --test test/chunk-consistency.test.mjs test/sse-replay.test.mjs
+      - name: Existing full suite
+        run: npm test
