@@ -8,7 +8,7 @@
     "dev": "node --watch server-v3.mjs",
     "worker": "node worker-v3.mjs",
     "start:v2": "node server-v2.mjs",
-    "test": "node --test test/core-v3.test.mjs test/chunks.test.mjs test/chunk-lru.test.mjs test/chunk-queue.test.mjs test/chunk-consistency.test.mjs test/sse-replay.test.mjs test/tile-grid.test.mjs test/tile-pixels.test.mjs test/minimap-nav.test.mjs test/metrics.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs test/api-chunks.test.mjs test/chat-cosmetics.test.mjs test/export-postgres.test.mjs test/store-mirrors.test.mjs test/db-sections.test.mjs test/postgres-chunks.test.mjs test/load-chunks.test.mjs",
+    "test": "node --test test/core-v3.test.mjs test/chunks.test.mjs test/chunk-lru.test.mjs test/chunk-queue.test.mjs test/chunk-consistency.test.mjs test/sse-replay.test.mjs test/tile-grid.test.mjs test/tile-pixels.test.mjs test/minimap-nav.test.mjs test/metrics.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs test/api-chunks.test.mjs test/chat-cosmetics.test.mjs test/export-postgres.test.mjs test/store-mirrors.test.mjs test/db-sections.test.mjs test/postgres-chunks.test.mjs test/postgres-incremental.test.mjs test/load-chunks.test.mjs",
     "export:postgres": "node scripts/export-postgres.mjs"
   },
   "dependencies": { "pg": "8.13.1", "redis": "4.7.0" },
