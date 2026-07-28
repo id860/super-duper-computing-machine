@@ -1,8 +1,8 @@
-// Viewport chunk loader.
-//
-// Requests exactly the chunks the viewport covers, in parallel batches, nearest
-// to the centre of the screen first, painting whatever the local cache already
-// holds before the network answers.
+// Viewport chunk loader, built along the same lines as a tile map engine
+// (Leaflet/OSM): request only the tiles the viewport covers, nearest to the
+// centre of the screen first, in parallel batches, drop requests that scroll
+// out of view, and hand the renderer enough state to reveal each tile
+// gracefully instead of popping it in.
 //
 // Two invariants keep this loop safe:
 //   * every requested chunk is marked as visited, even when the server sends
@@ -23,9 +23,11 @@ const MIN_TRACKED_CHUNKS = 96;
 const FRESH_WINDOW_MS = 60000;
 const DEBOUNCE_MS = 40;
 const MAX_REQUESTS_PER_PASS = 12; // Guard against pathological zoom-outs.
+const REVEAL_STAGGER_MS = 26; // Tiles of one batch reveal in a short cascade.
+const MAX_STAGGER_MS = 180;
 
-// How long the "content just arrived" fade lasts.
-export const CHUNK_FADE_MS = 320;
+// How long a tile takes to develop once its pixels are in.
+export const CHUNK_FADE_MS = 380;
 
 function planKeys(plan) {
 	const keys = [];
@@ -52,8 +54,8 @@ PixelEngine.prototype._scheduleChunkLoad = function () {
 	}, DEBOUNCE_MS);
 };
 
-// Keeps the canvas animating while something is still loading or fading, then
-// stops so an idle canvas costs nothing.
+// Keeps the canvas animating while something is still loading or developing,
+// then stops so an idle canvas costs nothing.
 PixelEngine.prototype._runChunkAnimation = function () {
 	if (this._chunkAnimFrame || typeof requestAnimationFrame !== 'function') return;
 	const step = () => {
@@ -90,15 +92,19 @@ PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
 	const stamp = Date.now();
 	const cells = [];
 	const keys = [];
-	let dropped = 0, faded = 0;
+	let dropped = 0, revealed = 0;
 	for (const chunk of chunks || []) {
 		const count = chunk.cells?.length || 0;
 		for (const cell of chunk.cells || []) cells.push(cell);
 		if (!track) continue;
 		const key = chunkKey(chunk.x, chunk.y);
-		// Only chunks that actually bring content fade in: blank areas must not
-		// blink as empty squares all over the canvas.
-		if (count && !this._loadedChunks.has(key)) { this._chunkFade.set(key, stamp); faded += 1; }
+		// Only chunks that actually bring content develop: blank areas must not
+		// blink as empty squares all over the canvas. A small stagger makes a
+		// batch arrive as a soft cascade rather than one hard flash.
+		if (count && !this._loadedChunks.has(key)) {
+			this._chunkFade.set(key, stamp + Math.min(MAX_STAGGER_MS, revealed * REVEAL_STAGGER_MS));
+			revealed += 1;
+		}
 		keys.push(key);
 	}
 	if (keys.length) dropped = this._markChunks(keys, stamp, limit);
@@ -107,13 +113,13 @@ PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
 		if (this.invalidateAllTiles) this.invalidateAllTiles();
 		this._miniDirty = true;
 	}
-	if (faded || dropped) this._runChunkAnimation();
+	if (revealed || dropped) this._runChunkAnimation();
 	return cells.length;
 };
 
 // Runs the planned requests with a small worker pool so the centre of the
 // screen is filled first without waiting for the outer batches.
-PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generation, limit) {
+PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generation, limit, signal) {
 	let next = 0;
 	const worker = async () => {
 		while (next < plans.length) {
@@ -121,7 +127,7 @@ PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generatio
 			const plan = plans[next++];
 			try {
 				const url = `/api/worlds/${encodeURIComponent(worldId)}/chunks?cx=${plan.cx}&cy=${plan.cy}&radius=${plan.radius}`;
-				const response = await fetch(url, { credentials: 'same-origin' });
+				const response = await fetch(url, { credentials: 'same-origin', signal });
 				if (!response.ok) continue;
 				const data = await response.json();
 				if (generation !== this._chunkGeneration) return;
@@ -132,7 +138,10 @@ PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generatio
 				this._markChunks(planKeys(plan), Date.now(), limit);
 				this.draw();
 				writeCachedChunks(worldId, chunks).catch(() => { /* Cache writes are optional. */ });
-			} catch { /* Network errors retry after the next viewport change. */ }
+			} catch (error) {
+				// Aborted requests are the normal outcome of panning away.
+				if (error?.name === 'AbortError') return;
+			}
 		}
 	};
 	const pool = [];
@@ -153,6 +162,11 @@ PixelEngine.prototype._loadViewportChunks = async function () {
 	const generation = (this._chunkGeneration = (this._chunkGeneration || 0) + 1);
 	const missing = rangeKeys(range).filter((key) => !this._loadedChunks.has(key));
 	if (!missing.length) { this._chunkPending.clear(); return; }
+	// Tiles that left the screen are no longer worth waiting for: drop their
+	// requests so the connection pool serves what the player is looking at.
+	this._chunkAbort?.abort();
+	const controller = typeof AbortController === 'function' ? new AbortController() : null;
+	this._chunkAbort = controller;
 	this._chunkPending = new Set(missing);
 	this._runChunkAnimation();
 	this._chunkLoading = true;
@@ -168,10 +182,10 @@ PixelEngine.prototype._loadViewportChunks = async function () {
 		};
 		const plans = planRequests(range, this._loadedChunks, center, REQUEST_RADIUS).slice(0, MAX_REQUESTS_PER_PASS);
 		if (!plans.length) return;
-		await this._runChunkPlans(worldId, plans, generation, limit);
+		await this._runChunkPlans(worldId, plans, generation, limit, controller?.signal);
 	} finally {
 		this._chunkLoading = false;
-		if (generation === this._chunkGeneration) this._chunkPending.clear();
+		if (generation === this._chunkGeneration) { this._chunkPending.clear(); this._chunkAbort = null; }
 	}
 	if (generation !== this._chunkGeneration) return;
 	// Continue only while passes keep shrinking the backlog: a wide zoom-out
