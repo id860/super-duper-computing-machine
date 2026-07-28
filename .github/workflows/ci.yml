@@ -40,6 +40,10 @@ jobs:
           node --check public/app/render-tiles.js
           node --check public/app/minimap-nav.js
           node --check public/app/experience-patch.js
+          node --check public/app/ui.js
+          node --check public/app/ui-base.js
+          node --check public/app/tools-core.js
+          node --check public/app/tools.js
       - name: Verify unit, API and load contracts
         run: npm test
   docker:
