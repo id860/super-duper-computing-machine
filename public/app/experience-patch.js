@@ -1,7 +1,13 @@
 // Player-experience layer: sidebar, cosmetics, quests/events and spawn preference.
 // The viewport chunk loader now lives in chunk-prefetch.js; this file must not
 // override it again or the batched viewport loading would be lost.
+//
+// Everything here reacts to DOM changes made by main.js. The observer therefore
+// has two hard rules: it must never run while we are editing the DOM ourselves
+// (that used to feed itself and freeze the tab right after signing in), and
+// every edit must be idempotent so a repeated pass changes nothing.
 import { PixelEngine } from './engine.js';
+import { CHUNK_FLASH_MS } from './chunk-prefetch.js';
 import { api } from './api.js';
 import { el, modal, toast } from './ui.js';
 
@@ -10,27 +16,41 @@ const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
 const MARK_SLOTS = ['badge', 'trail', 'cursor'];
 const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок', trail: 'След', cursor: 'Курсор' };
 
-// Grid tiers: zoomed far out the canvas shows whole chunks, mid zoom splits
-// each chunk into nine blocks, and close up the engine's own pixel grid takes
-// over. The steps give a sense of scale instead of one flat colour field.
-const CHUNK_GRID_MAX_SCALE = 1.6;
-const SUBCHUNK_MIN_SCALE = 0.45;
+// ---------- Canvas: chunks appear with a soft pulse and fade away ----------
+// No permanent grid is drawn any more: the player sees the area light up as it
+// arrives, the glow fades within a second, and the canvas is left clean.
+const SUBCHUNK_MIN_SCALE = 0.5; // Below this the 3×3 split is invisible anyway.
 
-function drawGridLines(ctx, engine, step, color) {
-	const span = step * engine.scale;
-	if (span < 6) return;
-	const first = Math.floor(-engine.offsetX / span), last = Math.floor((engine.viewW - engine.offsetX) / span);
-	const top = Math.floor(-engine.offsetY / span), bottom = Math.floor((engine.viewH - engine.offsetY) / span);
-	ctx.strokeStyle = color;
+function easeOut(t) { return 1 - Math.pow(1 - t, 2); }
+
+function drawChunkPulse(ctx, engine, key, age) {
+	const split = key.indexOf(':');
+	const cx = Number(key.slice(0, split)), cy = Number(key.slice(split + 1));
+	if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+	const span = FINE_CHUNK_SIZE * engine.scale;
+	const x = engine.offsetX + cx * span, y = engine.offsetY + cy * span;
+	if (x > engine.viewW || y > engine.viewH || x + span < 0 || y + span < 0) return;
+	// Fresh chunks start bright and settle to nothing.
+	const fade = 1 - easeOut(Math.min(1, age / CHUNK_FLASH_MS));
+	if (fade <= 0.01) return;
+	const gradient = ctx.createLinearGradient(x, y, x, y + span);
+	gradient.addColorStop(0, `rgba(96, 165, 250, ${0.20 * fade})`);
+	gradient.addColorStop(1, `rgba(59, 130, 246, ${0.06 * fade})`);
+	ctx.fillStyle = gradient;
+	ctx.fillRect(x, y, span, span);
+	ctx.strokeStyle = `rgba(59, 130, 246, ${0.45 * fade})`;
 	ctx.lineWidth = 1;
+	ctx.strokeRect(Math.floor(x) + 0.5, Math.floor(y) + 0.5, Math.round(span), Math.round(span));
+	// Close up the pulse shows the chunk splitting into nine blocks before the
+	// pixel grid of the engine takes over.
+	if (engine.scale < SUBCHUNK_MIN_SCALE) return;
+	const third = span / 3;
+	ctx.strokeStyle = `rgba(59, 130, 246, ${0.22 * fade})`;
 	ctx.beginPath();
-	for (let i = first; i <= last + 1; i++) {
-		const x = Math.floor(engine.offsetX + i * span) + 0.5;
-		ctx.moveTo(x, 0); ctx.lineTo(x, engine.viewH);
-	}
-	for (let j = top; j <= bottom + 1; j++) {
-		const y = Math.floor(engine.offsetY + j * span) + 0.5;
-		ctx.moveTo(0, y); ctx.lineTo(engine.viewW, y);
+	for (let i = 1; i < 3; i++) {
+		const gx = Math.floor(x + third * i) + 0.5, gy = Math.floor(y + third * i) + 0.5;
+		ctx.moveTo(gx, y); ctx.lineTo(gx, y + span);
+		ctx.moveTo(x, gy); ctx.lineTo(x + span, gy);
 	}
 	ctx.stroke();
 }
@@ -39,11 +59,11 @@ const originalSetWorld = PixelEngine.prototype.setWorld;
 PixelEngine.prototype.setWorld = function (...args) {
 	originalSetWorld.apply(this, args); window.__pixelEngine = this; this.showSpawnZone = localStorage.getItem('pf.hideSpawnZone') !== '1';
 	this.onOverlay = (ctx) => {
-		if (!this.world?.infinite || this.scale > CHUNK_GRID_MAX_SCALE) return;
+		const flash = this._chunkFlash;
+		if (!flash || !flash.size) return;
+		const stamp = Date.now();
 		ctx.save();
-		drawGridLines(ctx, this, FINE_CHUNK_SIZE, 'rgba(37,99,235,.18)');
-		// Each chunk splits into 3×3 blocks once the player zooms in far enough.
-		if (this.scale >= SUBCHUNK_MIN_SCALE) drawGridLines(ctx, this, FINE_CHUNK_SIZE / 3, 'rgba(37,99,235,.09)');
+		for (const [key, at] of flash) drawChunkPulse(ctx, this, key, stamp - at);
 		ctx.restore();
 	};
 };
@@ -63,16 +83,22 @@ const chatCosmetics = new Map(); // nick -> equipped slots
 const pendingLookups = new Set();
 let myCosmetics = {};
 
+function markSignature(active) { return MARK_SLOTS.map((slot) => active[slot] || '').join('|'); }
+
 // Badges, trails and cursors are rendered as separate marks in front of the
 // nickname instead of CSS pseudo-elements: several slots can be worn at once
 // (::before could only ever show one) and the icons no longer collide with the
 // message text. The colon after the nick is dropped as well, so a mark is
 // always followed by clean spacing.
 function decorateNode(node, active, nick) {
-	node.textContent = nick;
-	node.className = 'chat-nick' + (active.nick ? ` cosmetic-${active.nick}` : '');
+	const className = 'chat-nick' + (active.nick ? ` cosmetic-${active.nick}` : '');
+	if (node.textContent !== nick) node.textContent = nick;
+	if (node.className !== className) node.className = className;
 	const host = node.parentNode;
 	if (!host) return;
+	const signature = markSignature(active);
+	if (node.dataset.marks === signature) return; // Nothing to redo on later passes.
+	node.dataset.marks = signature;
 	host.querySelectorAll(':scope > .chat-mark').forEach((mark) => mark.remove());
 	for (const slot of MARK_SLOTS) {
 		if (!active[slot]) continue;
@@ -88,14 +114,15 @@ function decorateChat() {
 		if (!node) return;
 		const nick = (node.dataset.nick || node.textContent).replace(/:\s*$/, '').trim();
 		if (!nick) return;
-		node.dataset.nick = nick;
+		if (node.dataset.nick !== nick) node.dataset.nick = nick;
 		// Strip the colon straight away so the nickname never flickers between
 		// "nick:" and the decorated form while cosmetics are being fetched.
 		if (node.textContent !== nick) node.textContent = nick;
 		const active = chatCosmetics.get(nick);
 		if (!active) { if (!pendingLookups.has(nick)) lookupCosmetics(nick); return; }
 		decorateNode(node, active, nick);
-		row.dataset.cosmeticFrame = active.frame || '';
+		const frame = active.frame || '';
+		if (row.dataset.cosmeticFrame !== frame) row.dataset.cosmeticFrame = frame;
 	});
 }
 
@@ -103,69 +130,80 @@ function decorateChat() {
 // only once the profile modal has been opened.
 function decorateHeader() {
 	const box = document.querySelector('#userBox .me');
-	const node = box?.querySelector('.me-nick');
+	const node = box?.querySelector('.me-nick') || box?.querySelector('.chat-nick');
 	const nick = api.state.me?.nick;
 	if (!box || !node || !nick) return;
-	node.dataset.nick = nick;
-	node.textContent = nick;
-	node.className = 'me-nick chat-nick' + (myCosmetics.nick ? ` cosmetic-${myCosmetics.nick}` : '');
-	box.querySelectorAll(':scope > .chat-mark').forEach((mark) => mark.remove());
-	for (const slot of MARK_SLOTS) {
-		if (!myCosmetics[slot]) continue;
-		const mark = el('span', { class: 'chat-mark' });
-		mark.dataset.mark = myCosmetics[slot];
-		box.insertBefore(mark, node);
+	if (node.dataset.nick !== nick) node.dataset.nick = nick;
+	if (node.textContent !== nick) node.textContent = nick;
+	const className = 'me-nick chat-nick' + (myCosmetics.nick ? ` cosmetic-${myCosmetics.nick}` : '');
+	if (node.className !== className) node.className = className;
+	const signature = markSignature(myCosmetics);
+	if (node.dataset.marks !== signature) {
+		node.dataset.marks = signature;
+		box.querySelectorAll(':scope > .chat-mark').forEach((mark) => mark.remove());
+		for (const slot of MARK_SLOTS) {
+			if (!myCosmetics[slot]) continue;
+			const mark = el('span', { class: 'chat-mark' });
+			mark.dataset.mark = myCosmetics[slot];
+			box.insertBefore(mark, node);
+		}
 	}
-	box.dataset.cosmeticFrame = myCosmetics.frame || '';
+	const frame = myCosmetics.frame || '';
+	if (box.dataset.cosmeticFrame !== frame) box.dataset.cosmeticFrame = frame;
 }
 
 async function lookupCosmetics(nick) {
 	pendingLookups.add(nick);
-	try { const result = await api.get(`/api/cosmetics?nick=${encodeURIComponent(nick)}`); chatCosmetics.set(nick, result.cosmetics || {}); decorateChat(); }
+	try { const result = await api.get(`/api/cosmetics?nick=${encodeURIComponent(nick)}`); chatCosmetics.set(nick, result.cosmetics || {}); sync(); }
 	catch { chatCosmetics.set(nick, {}); }
 	finally { pendingLookups.delete(nick); }
 }
 
 // Chat history now carries each author's cosmetics; cache them before rendering.
-const originalChatGet = api.chatGet.bind(api);
-api.chatGet = async (worldId) => {
-	const result = await originalChatGet(worldId);
-	if (result.cosmetics) for (const [nick, slots] of Object.entries(result.cosmetics)) chatCosmetics.set(nick, slots || {});
-	for (const message of result.messages || []) if (message.cosmetics) chatCosmetics.set(message.nick, message.cosmetics);
-	setTimeout(decorateChat, 0);
-	return result;
-};
+if (typeof api.chatGet === 'function') {
+	const originalChatGet = api.chatGet.bind(api);
+	api.chatGet = async (worldId) => {
+		const result = await originalChatGet(worldId);
+		if (result.cosmetics) for (const [nick, slots] of Object.entries(result.cosmetics)) chatCosmetics.set(nick, slots || {});
+		for (const message of result.messages || []) if (message.cosmetics) chatCosmetics.set(message.nick, message.cosmetics);
+		setTimeout(sync, 0);
+		return result;
+	};
+}
 
 // Live SSE messages carry no cosmetics, so unknown authors are resolved on demand.
-const originalStream = api.stream.bind(api);
-api.stream = (worldId, handlers = {}) => {
-	const chat = handlers.chat;
-	if (chat) handlers.chat = (data) => {
-		if (data?.cosmetics) chatCosmetics.set(data.nick, data.cosmetics);
-		chat(data);
-		if (data?.nick && !chatCosmetics.has(data.nick)) lookupCosmetics(data.nick); else setTimeout(decorateChat, 0);
+if (typeof api.stream === 'function') {
+	const originalStream = api.stream.bind(api);
+	api.stream = (worldId, handlers = {}) => {
+		const chat = handlers.chat;
+		if (chat) handlers.chat = (data) => {
+			if (data?.cosmetics) chatCosmetics.set(data.nick, data.cosmetics);
+			chat(data);
+			if (data?.nick && !chatCosmetics.has(data.nick)) lookupCosmetics(data.nick); else setTimeout(sync, 0);
+		};
+		return originalStream(worldId, handlers);
 	};
-	return originalStream(worldId, handlers);
-};
+}
 
 // Completing a daily quest now notifies the player the same way achievements do.
-const originalOps = api.ops.bind(api);
-api.ops = async (worldId, payload) => {
-	const result = await originalOps(worldId, payload);
-	for (const quest of result?.reward?.quests || []) {
-		const reward = quest.reward ? ` · ${quest.reward.coins || 0} ◉, ${quest.reward.xp || 0} XP` : '';
-		toast(`Задание выполнено: ${quest.title || quest.id}${reward}`, 'success');
-	}
-	return result;
-};
+if (typeof api.ops === 'function') {
+	const originalOps = api.ops.bind(api);
+	api.ops = async (worldId, payload) => {
+		const result = await originalOps(worldId, payload);
+		for (const quest of result?.reward?.quests || []) {
+			const reward = quest.reward ? ` · ${quest.reward.coins || 0} ◉, ${quest.reward.xp || 0} XP` : '';
+			toast(`Задание выполнено: ${quest.title || quest.id}${reward}`, 'success');
+		}
+		return result;
+	};
+}
 
 function applyCosmetics(active = {}) {
 	myCosmetics = { ...active };
 	for (const slot of SLOTS) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || '';
 	const nick = api.state.me?.nick;
 	if (nick) chatCosmetics.set(nick, { ...active });
-	decorateHeader();
-	decorateChat();
+	sync();
 }
 
 // Load the equipped set as soon as the player is known, so a page refresh shows
@@ -263,16 +301,52 @@ function enhanceEvents() {
 		node.appendChild(details);
 	});
 }
-const originalEvents = api.events; api.events = async () => { const result = await originalEvents(); api.state._events = result.active || []; return result; };
+
+if (typeof api.events === 'function') {
+	const originalEvents = api.events.bind(api);
+	api.events = async () => { const result = await originalEvents(); api.state._events = result.active || []; return result; };
+}
+
+// ---------- DOM synchronisation ----------
+// The observer is disconnected while we edit, and reconnected afterwards. Any
+// change we make during a pass would otherwise retrigger the callback, which is
+// exactly what locked up the page after registering.
+let observer = null;
+let syncing = false;
+let queued = false;
 let cosmeticsRequested = false;
-const observer = new MutationObserver(() => {
+
+function patchDom() {
 	const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs');
-	if (chat && toggle && tabs && toggle.previousElementSibling !== null) tabs.insertBefore(toggle, chat);
+	if (chat && toggle && tabs && toggle.nextElementSibling !== chat) tabs.insertBefore(toggle, chat);
 	const me = document.querySelector('#userBox .me');
 	if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; }
 	if (api.state.me && !cosmeticsRequested) { cosmeticsRequested = true; loadMyCosmetics(); }
+	if (!api.state.me) cosmeticsRequested = false; // Allow a reload after signing out.
 	decorateHeader();
 	decorateChat();
 	enhanceEvents();
-});
-observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+function sync() {
+	if (syncing) return;
+	syncing = true;
+	observer?.disconnect();
+	try { patchDom(); }
+	catch (error) { console.error('experience patch failed:', error); }
+	finally {
+		observer?.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+		syncing = false;
+	}
+}
+
+function scheduleSync() {
+	if (syncing || queued) return;
+	queued = true;
+	const run = () => { queued = false; sync(); };
+	if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run); else setTimeout(run, 16);
+}
+
+observer = new MutationObserver(scheduleSync);
+observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+scheduleSync();
