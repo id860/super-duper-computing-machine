@@ -7,6 +7,10 @@
 // chunks the viewport covers, in parallel batches, nearest to the centre of the
 // screen first, and paints anything already sitting in the local cache before
 // the network answers.
+//
+// Freshly arrived chunks are registered in `_chunkFlash` so the renderer can
+// briefly highlight them; the highlight fades on its own and leaves no
+// permanent grid behind.
 import { PixelEngine } from './engine.js';
 import { evictChunkPixels, touchChunk } from './chunk-lru.js';
 import { chunkKey, planRequests, rangeKeys, rangeSize, viewportChunkRange } from './chunk-queue.js';
@@ -20,6 +24,9 @@ const FRESH_WINDOW_MS = 60000;
 const DEBOUNCE_MS = 40;
 const MAX_REQUESTS_PER_PASS = 12; // Guard against pathological zoom-outs.
 
+// How long the "chunk just arrived" highlight stays visible before it is gone.
+export const CHUNK_FLASH_MS = 850;
+
 PixelEngine.prototype._scheduleChunkLoad = function () {
 	if (!this.world || !this.world.infinite) return;
 	if (this._chunkTimer) return; // Coalesce a burst of pan or zoom events.
@@ -29,20 +36,39 @@ PixelEngine.prototype._scheduleChunkLoad = function () {
 	}, DEBOUNCE_MS);
 };
 
+// Keeps the highlight animating until every pulse has faded, then stops so an
+// idle canvas costs nothing.
+PixelEngine.prototype._runChunkFlash = function () {
+	if (this._chunkFlashFrame || typeof requestAnimationFrame !== 'function') return;
+	const step = () => {
+		this._chunkFlashFrame = null;
+		const stamp = Date.now();
+		for (const [key, at] of this._chunkFlash) if (stamp - at > CHUNK_FLASH_MS) this._chunkFlash.delete(key);
+		this.draw();
+		if (this._chunkFlash.size) this._chunkFlashFrame = requestAnimationFrame(step);
+	};
+	this._chunkFlashFrame = requestAnimationFrame(step);
+};
+
 PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
 	if (!this._loadedChunks) this._loadedChunks = new Set();
 	if (!this._chunkAccess) this._chunkAccess = new Map();
+	if (!this._chunkFlash) this._chunkFlash = new Map();
 	const cap = Math.max(MIN_TRACKED_CHUNKS, limit || 0);
 	const stamp = Date.now(), freshBefore = stamp - FRESH_WINDOW_MS;
 	const cells = [];
-	let dropped = 0;
+	let dropped = 0, pulses = 0;
 	for (const chunk of chunks || []) {
 		for (const cell of chunk.cells || []) cells.push(cell);
 		if (!track) continue;
 		const key = chunkKey(chunk.x, chunk.y);
+		// Only chunks that were genuinely missing pulse, so panning back over
+		// already loaded ground stays calm.
+		if (!this._loadedChunks.has(key)) { this._chunkFlash.set(key, stamp); pulses += 1; }
 		this._loadedChunks.add(key);
 		for (const stale of touchChunk(this._chunkAccess, key, stamp, cap)) {
 			this._loadedChunks.delete(stale);
+			this._chunkFlash.delete(stale);
 			dropped += evictChunkPixels(this.pixels, stale, CHUNK_SIZE, freshBefore);
 		}
 	}
@@ -52,6 +78,7 @@ PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
 		this._miniDirty = true;
 		this.draw();
 	}
+	if (pulses) this._runChunkFlash();
 	return cells.length;
 };
 
