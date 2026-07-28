@@ -1,71 +1,78 @@
 // Player-experience layer: sidebar, cosmetics, quests/events and spawn preference.
-// The viewport chunk loader now lives in chunk-prefetch.js; this file must not
+// The viewport chunk loader lives in chunk-prefetch.js; this file must not
 // override it again or the batched viewport loading would be lost.
 //
-// Everything here reacts to DOM changes made by main.js. The observer therefore
-// has two hard rules: it must never run while we are editing the DOM ourselves
-// (that used to feed itself and freeze the tab right after signing in), and
-// every edit must be idempotent so a repeated pass changes nothing.
+// This layer reacts to markup produced by main.js. It used to do so through a
+// MutationObserver, but the callback edits the DOM itself, so every pass woke
+// the observer again and the tab locked up right after signing in. Now the DOM
+// is reconciled on a slow timer with strictly idempotent edits: a pass that
+// changes nothing costs a handful of comparisons and can never feed itself.
 import { PixelEngine } from './engine.js';
-import { CHUNK_FLASH_MS } from './chunk-prefetch.js';
+import { CHUNK_FADE_MS } from './chunk-prefetch.js';
 import { api } from './api.js';
 import { el, modal, toast } from './ui.js';
 
+const SYNC_INTERVAL_MS = 300;
 const FINE_CHUNK_SIZE = 86;
 const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
 const MARK_SLOTS = ['badge', 'trail', 'cursor'];
 const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок', trail: 'След', cursor: 'Курсор' };
 
-// ---------- Canvas: chunks appear with a soft pulse and fade away ----------
-// No permanent grid is drawn any more: the player sees the area light up as it
-// arrives, the glow fades within a second, and the canvas is left clean.
-const SUBCHUNK_MIN_SCALE = 0.5; // Below this the 3×3 split is invisible anyway.
+// ---------- Canvas: chunks behave like map tiles ----------
+// Nothing permanent is drawn on top of the world any more. An area that is
+// still travelling over the wire shows a calm skeleton in the world background,
+// and as soon as its pixels arrive the skeleton dissolves into the content.
+// There are no borders, no blue squares and no grid left behind.
+const SKELETON_MIN = 0.05, SKELETON_MAX = 0.11, SKELETON_PERIOD_MS = 1400;
 
-function easeOut(t) { return 1 - Math.pow(1 - t, 2); }
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
 
-function drawChunkPulse(ctx, engine, key, age) {
+function chunkRect(engine, key) {
 	const split = key.indexOf(':');
 	const cx = Number(key.slice(0, split)), cy = Number(key.slice(split + 1));
-	if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+	if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
 	const span = FINE_CHUNK_SIZE * engine.scale;
 	const x = engine.offsetX + cx * span, y = engine.offsetY + cy * span;
-	if (x > engine.viewW || y > engine.viewH || x + span < 0 || y + span < 0) return;
-	// Fresh chunks start bright and settle to nothing.
-	const fade = 1 - easeOut(Math.min(1, age / CHUNK_FLASH_MS));
-	if (fade <= 0.01) return;
-	const gradient = ctx.createLinearGradient(x, y, x, y + span);
-	gradient.addColorStop(0, `rgba(96, 165, 250, ${0.20 * fade})`);
-	gradient.addColorStop(1, `rgba(59, 130, 246, ${0.06 * fade})`);
-	ctx.fillStyle = gradient;
-	ctx.fillRect(x, y, span, span);
-	ctx.strokeStyle = `rgba(59, 130, 246, ${0.45 * fade})`;
-	ctx.lineWidth = 1;
-	ctx.strokeRect(Math.floor(x) + 0.5, Math.floor(y) + 0.5, Math.round(span), Math.round(span));
-	// Close up the pulse shows the chunk splitting into nine blocks before the
-	// pixel grid of the engine takes over.
-	if (engine.scale < SUBCHUNK_MIN_SCALE) return;
-	const third = span / 3;
-	ctx.strokeStyle = `rgba(59, 130, 246, ${0.22 * fade})`;
-	ctx.beginPath();
-	for (let i = 1; i < 3; i++) {
-		const gx = Math.floor(x + third * i) + 0.5, gy = Math.floor(y + third * i) + 0.5;
-		ctx.moveTo(gx, y); ctx.lineTo(gx, y + span);
-		ctx.moveTo(x, gy); ctx.lineTo(x + span, gy);
+	if (x > engine.viewW || y > engine.viewH || x + span < 0 || y + span < 0) return null;
+	return { x, y, span };
+}
+
+function drawChunkLoading(ctx, engine) {
+	const pending = engine._chunkPending, fading = engine._chunkFade;
+	if ((!pending || !pending.size) && (!fading || !fading.size)) return;
+	const stamp = Date.now();
+	ctx.save();
+	// Breathing skeleton: shows that the area is loading without shouting.
+	if (pending && pending.size) {
+		const wave = (Math.sin((stamp % SKELETON_PERIOD_MS) / SKELETON_PERIOD_MS * Math.PI * 2) + 1) / 2;
+		ctx.fillStyle = `rgba(15, 23, 42, ${(SKELETON_MIN + (SKELETON_MAX - SKELETON_MIN) * wave).toFixed(3)})`;
+		for (const key of pending) {
+			const rect = chunkRect(engine, key);
+			if (rect) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
+		}
 	}
-	ctx.stroke();
+	// Arrived content is revealed by dissolving a veil painted in the world
+	// background, so pixels appear to develop instead of popping in.
+	if (fading && fading.size) {
+		const veil = engine.world?.background || '#ffffff';
+		for (const [key, at] of fading) {
+			const rect = chunkRect(engine, key);
+			if (!rect) continue;
+			const alpha = 1 - easeOut(Math.min(1, (stamp - at) / CHUNK_FADE_MS));
+			if (alpha <= 0.01) continue;
+			ctx.globalAlpha = alpha;
+			ctx.fillStyle = veil;
+			ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
+		}
+		ctx.globalAlpha = 1;
+	}
+	ctx.restore();
 }
 
 const originalSetWorld = PixelEngine.prototype.setWorld;
 PixelEngine.prototype.setWorld = function (...args) {
 	originalSetWorld.apply(this, args); window.__pixelEngine = this; this.showSpawnZone = localStorage.getItem('pf.hideSpawnZone') !== '1';
-	this.onOverlay = (ctx) => {
-		const flash = this._chunkFlash;
-		if (!flash || !flash.size) return;
-		const stamp = Date.now();
-		ctx.save();
-		for (const [key, at] of flash) drawChunkPulse(ctx, this, key, stamp - at);
-		ctx.restore();
-	};
+	this.onOverlay = (ctx) => drawChunkLoading(ctx, this);
 };
 PixelEngine.prototype._drawZone = function (ctx) { const sp = this._spawn(); if (!sp || !this.world?.infinite || this.showSpawnZone === false) return; const x = this.offsetX, y = this.offsetY, size = sp * this.scale; ctx.save(); ctx.fillStyle = 'rgba(37,99,235,.045)'; ctx.fillRect(x, y, size, size); ctx.fillStyle = 'rgba(37,99,235,.32)'; ctx.font = '600 11px system-ui'; const lx = Math.min(Math.max(x + 8, 8), this.viewW - 52), ly = Math.min(Math.max(y + 16, 16), this.viewH - 8); ctx.fillText(`${sp}×${sp}`, lx, ly); ctx.restore(); };
 
@@ -154,7 +161,7 @@ function decorateHeader() {
 
 async function lookupCosmetics(nick) {
 	pendingLookups.add(nick);
-	try { const result = await api.get(`/api/cosmetics?nick=${encodeURIComponent(nick)}`); chatCosmetics.set(nick, result.cosmetics || {}); sync(); }
+	try { const result = await api.get(`/api/cosmetics?nick=${encodeURIComponent(nick)}`); chatCosmetics.set(nick, result.cosmetics || {}); }
 	catch { chatCosmetics.set(nick, {}); }
 	finally { pendingLookups.delete(nick); }
 }
@@ -166,7 +173,6 @@ if (typeof api.chatGet === 'function') {
 		const result = await originalChatGet(worldId);
 		if (result.cosmetics) for (const [nick, slots] of Object.entries(result.cosmetics)) chatCosmetics.set(nick, slots || {});
 		for (const message of result.messages || []) if (message.cosmetics) chatCosmetics.set(message.nick, message.cosmetics);
-		setTimeout(sync, 0);
 		return result;
 	};
 }
@@ -179,7 +185,7 @@ if (typeof api.stream === 'function') {
 		if (chat) handlers.chat = (data) => {
 			if (data?.cosmetics) chatCosmetics.set(data.nick, data.cosmetics);
 			chat(data);
-			if (data?.nick && !chatCosmetics.has(data.nick)) lookupCosmetics(data.nick); else setTimeout(sync, 0);
+			if (data?.nick && !chatCosmetics.has(data.nick) && !pendingLookups.has(data.nick)) lookupCosmetics(data.nick);
 		};
 		return originalStream(worldId, handlers);
 	};
@@ -203,7 +209,6 @@ function applyCosmetics(active = {}) {
 	for (const slot of SLOTS) document.body.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = active[slot] || '';
 	const nick = api.state.me?.nick;
 	if (nick) chatCosmetics.set(nick, { ...active });
-	sync();
 }
 
 // Load the equipped set as soon as the player is known, so a page refresh shows
@@ -308,45 +313,28 @@ if (typeof api.events === 'function') {
 }
 
 // ---------- DOM synchronisation ----------
-// The observer is disconnected while we edit, and reconnected afterwards. Any
-// change we make during a pass would otherwise retrigger the callback, which is
-// exactly what locked up the page after registering.
-let observer = null;
+// A single reentrancy-guarded pass on a timer. Every edit below checks the
+// current value first, so a steady-state pass performs no DOM writes at all and
+// cannot trigger further work.
 let syncing = false;
-let queued = false;
 let cosmeticsRequested = false;
-
-function patchDom() {
-	const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs');
-	if (chat && toggle && tabs && toggle.nextElementSibling !== chat) tabs.insertBefore(toggle, chat);
-	const me = document.querySelector('#userBox .me');
-	if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; }
-	if (api.state.me && !cosmeticsRequested) { cosmeticsRequested = true; loadMyCosmetics(); }
-	if (!api.state.me) cosmeticsRequested = false; // Allow a reload after signing out.
-	decorateHeader();
-	decorateChat();
-	enhanceEvents();
-}
 
 function sync() {
 	if (syncing) return;
 	syncing = true;
-	observer?.disconnect();
-	try { patchDom(); }
-	catch (error) { console.error('experience patch failed:', error); }
-	finally {
-		observer?.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-		syncing = false;
-	}
+	try {
+		const chat = document.querySelector('#sidebar .tab[data-tab="chat"]'), toggle = document.getElementById('sidebarToggle'), tabs = document.querySelector('#sidebar .tabs');
+		if (chat && toggle && tabs && toggle.nextElementSibling !== chat) tabs.insertBefore(toggle, chat);
+		const me = document.querySelector('#userBox .me');
+		if (me && !me.dataset.profilePatch) { me.dataset.profilePatch = '1'; me.onclick = openPlayerProfile; }
+		if (api.state.me && !cosmeticsRequested) { cosmeticsRequested = true; loadMyCosmetics(); }
+		if (!api.state.me) cosmeticsRequested = false; // Allow a reload after signing out.
+		decorateHeader();
+		decorateChat();
+		enhanceEvents();
+	} catch (error) { console.error('experience patch failed:', error); }
+	finally { syncing = false; }
 }
 
-function scheduleSync() {
-	if (syncing || queued) return;
-	queued = true;
-	const run = () => { queued = false; sync(); };
-	if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run); else setTimeout(run, 16);
-}
-
-observer = new MutationObserver(scheduleSync);
-observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-scheduleSync();
+setInterval(sync, SYNC_INTERVAL_MS);
+sync();
