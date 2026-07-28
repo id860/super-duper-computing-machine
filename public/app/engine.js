@@ -43,7 +43,15 @@ export class PixelEngine {
 		this.resize();
 	}
 
+	// Повторная загрузка того же мира не должна швырять игрока на спавн.
+	// Мир пере-синхронизируется после неудачной операции (например, «недостаточно
+	// энергии»), после lifecycle-события и после входа в аккаунт; раньше в каждом
+	// из этих случаев вызывался fit(), и камера улетала в центр зоны спавна.
+	// Теперь fit() выполняется только при первом открытии или при переходе в
+	// другой мир, а при пере-синхронизации сохраняются масштаб и смещение.
 	setWorld(world, pixels) {
+		const sameWorld = !!(this.world && world && this.world.id === world.id);
+		const cam = sameWorld ? { scale: this.scale, offsetX: this.offsetX, offsetY: this.offsetY } : null;
 		this.world = world;
 		this.minScale = world.zoomMin || 0.5;
 		this.maxScale = world.zoomMax || 40;
@@ -51,8 +59,23 @@ export class PixelEngine {
 		this.pixels.clear();
 		// Начальная загрузка: [x, y, color] — без автора (ник не известен)
 		for (const p of pixels || []) this.pixels.set(p[0] + ':' + p[1], { c: p[2] });
+		// Пиксели сброшены, значит и карта загруженных чанков больше не верна:
+		// без её очистки загрузчик считал бы вьюпорт уже прогруженным и холст
+		// остался бы пустым до первого панорамирования.
+		this._loadedChunks?.clear();
+		this._chunkAccess?.clear();
+		this._chunkFade?.clear();
+		this._chunkPending?.clear();
+		this._chunkGeneration = (this._chunkGeneration || 0) + 1;
 		this._miniDirty = true;
-		this.fit();
+		if (cam) {
+			this.scale = Math.max(this.minScale, Math.min(this.maxScale, cam.scale));
+			this.offsetX = cam.offsetX;
+			this.offsetY = cam.offsetY;
+			this.draw();
+			this._emitView();
+		} else this.fit();
+		this._scheduleChunkLoad?.();
 	}
 
 	// nick и at — опциональны; передаются из SSE-события (там есть `by`)
