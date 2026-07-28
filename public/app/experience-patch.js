@@ -18,12 +18,20 @@ const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
 const MARK_SLOTS = ['badge', 'trail', 'cursor'];
 const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок', trail: 'След', cursor: 'Курсор' };
 
-// ---------- Canvas: chunks behave like map tiles ----------
-// Nothing permanent is drawn on top of the world any more. An area that is
-// still travelling over the wire shows a calm skeleton in the world background,
-// and as soon as its pixels arrive the skeleton dissolves into the content.
-// There are no borders, no blue squares and no grid left behind.
-const SKELETON_MIN = 0.05, SKELETON_MAX = 0.11, SKELETON_PERIOD_MS = 1400;
+// ---------- Canvas: chunks are revealed the way map tiles are ----------
+// Borrowed from tile map engines (Leaflet, OSM, Google Maps):
+//   1. an area that is still loading is never left as a hole — the coarse
+//      overview that the minimap already holds is stretched over it, so the
+//      player sees a blurred low-resolution version of the art first;
+//   2. where not even an overview exists, a calm shimmer sweeps across the
+//      waiting tiles, the same idea as a content skeleton;
+//   3. when the real pixels arrive the placeholder dissolves into them over a
+//      short fade, in a slight cascade across the batch;
+//   4. nothing persists afterwards: no borders, no grid, no coloured squares.
+const SHIMMER_PERIOD_MS = 1600;
+const SHIMMER_BAND = 520; // Width of the travelling highlight, in screen pixels.
+const PREVIEW_ALPHA = 0.55;
+const SKELETON_ALPHA = 0.06;
 
 function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
 
@@ -34,35 +42,79 @@ function chunkRect(engine, key) {
 	const span = FINE_CHUNK_SIZE * engine.scale;
 	const x = engine.offsetX + cx * span, y = engine.offsetY + cy * span;
 	if (x > engine.viewW || y > engine.viewH || x + span < 0 || y + span < 0) return null;
-	return { x, y, span };
+	return { x, y, span, cx, cy };
+}
+
+// Stretches the matching piece of the minimap buffer over a tile that has not
+// arrived yet — the classic "parent tile" placeholder of map engines.
+function drawPreview(ctx, engine, rect) {
+	const mini = engine._mini;
+	const scale = engine._miniScale;
+	if (!mini || !scale) return false;
+	const sx = engine._miniOx + (rect.cx * FINE_CHUNK_SIZE - engine._mbx0) * scale;
+	const sy = engine._miniOy + (rect.cy * FINE_CHUNK_SIZE - engine._mby0) * scale;
+	const size = FINE_CHUNK_SIZE * scale;
+	if (size < 0.6) return false;
+	if (sx + size <= 0 || sy + size <= 0 || sx >= mini.width || sy >= mini.height) return false;
+	try {
+		ctx.imageSmoothingEnabled = true; // Blur it on purpose: it is a preview.
+		ctx.globalAlpha = PREVIEW_ALPHA;
+		ctx.drawImage(mini, sx, sy, size, size, rect.x, rect.y, rect.span, rect.span);
+		ctx.globalAlpha = 1;
+		ctx.imageSmoothingEnabled = false;
+		return true;
+	} catch { return false; }
 }
 
 function drawChunkLoading(ctx, engine) {
 	const pending = engine._chunkPending, fading = engine._chunkFade;
-	if ((!pending || !pending.size) && (!fading || !fading.size)) return;
+	const waiting = pending && pending.size, developing = fading && fading.size;
+	if (!waiting && !developing) return;
 	const stamp = Date.now();
 	ctx.save();
-	// Breathing skeleton: shows that the area is loading without shouting.
-	if (pending && pending.size) {
-		const wave = (Math.sin((stamp % SKELETON_PERIOD_MS) / SKELETON_PERIOD_MS * Math.PI * 2) + 1) / 2;
-		ctx.fillStyle = `rgba(15, 23, 42, ${(SKELETON_MIN + (SKELETON_MAX - SKELETON_MIN) * wave).toFixed(3)})`;
+	if (waiting) {
+		const rects = [];
 		for (const key of pending) {
 			const rect = chunkRect(engine, key);
-			if (rect) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
+			if (rect) rects.push(rect);
+		}
+		// Low-resolution preview first, a flat wash where none is available.
+		const bare = [];
+		for (const rect of rects) if (!drawPreview(ctx, engine, rect)) bare.push(rect);
+		if (bare.length) {
+			ctx.fillStyle = `rgba(15, 23, 42, ${SKELETON_ALPHA})`;
+			for (const rect of bare) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
+		}
+		// One travelling highlight for the whole waiting area: it reads as a
+		// single loading surface instead of many separate blinking squares.
+		if (rects.length) {
+			const travel = engine.viewW + engine.viewH + SHIMMER_BAND * 2;
+			const head = ((stamp % SHIMMER_PERIOD_MS) / SHIMMER_PERIOD_MS) * travel - SHIMMER_BAND;
+			const gradient = ctx.createLinearGradient(head - SHIMMER_BAND, 0, head + SHIMMER_BAND, engine.viewH);
+			gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+			gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.34)');
+			gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+			ctx.fillStyle = gradient;
+			for (const rect of rects) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
 		}
 	}
-	// Arrived content is revealed by dissolving a veil painted in the world
-	// background, so pixels appear to develop instead of popping in.
-	if (fading && fading.size) {
+	// Arrived content develops out of its placeholder: the veil is painted in
+	// the world background so pixels emerge instead of popping in.
+	if (developing) {
 		const veil = engine.world?.background || '#ffffff';
 		for (const [key, at] of fading) {
 			const rect = chunkRect(engine, key);
 			if (!rect) continue;
-			const alpha = 1 - easeOut(Math.min(1, (stamp - at) / CHUNK_FADE_MS));
+			const age = stamp - at;
+			if (age < 0) continue; // Staggered start: this tile has not begun yet.
+			const alpha = 1 - easeOut(Math.min(1, age / CHUNK_FADE_MS));
 			if (alpha <= 0.01) continue;
 			ctx.globalAlpha = alpha;
 			ctx.fillStyle = veil;
 			ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
+			// The blurred preview lingers underneath for a moment, so the crisp
+			// pixels appear to sharpen rather than replace the placeholder.
+			if (alpha > 0.15) { ctx.globalAlpha = alpha * 0.6; drawPreview(ctx, engine, rect); }
 		}
 		ctx.globalAlpha = 1;
 	}
