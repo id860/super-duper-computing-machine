@@ -24,19 +24,43 @@ function updateEnergy(energy) {
 	$('energyText').textContent = energy.mode === 'infinite' ? '\u221e' : energy.mode === 'off' ? '\u2014' : energy.value + '/' + energy.max;
 }
 
+// Счётчики в шапке меняются на каждый нарисованный пиксель. Раньше renderMe()
+// пересобирал весь блок игрока, поэтому узлы пересоздавались, а ширина чипа
+// прыгала вслед за числом — шапка заметно тряслась. Теперь текст обновляется на
+// месте, цифры моноширинные, а минимальная ширина только растёт.
+function setCounter(node, text) {
+	if (!node || node.textContent === text) return;
+	node.style.fontVariantNumeric = 'tabular-nums';
+	node.textContent = text;
+	const width = Math.max(text.length, Number(node.dataset.width || 0));
+	if (width !== Number(node.dataset.width || 0)) {
+		node.dataset.width = String(width);
+		node.style.minWidth = width + 'ch';
+	}
+}
+
 function renderMe() {
 	const me = api.state.me;
 	const box = $('userBox');
-	box.innerHTML = '';
 	if (!me) {
+		box.innerHTML = '';
 		box.appendChild(el('button', { class: 'btn btn-primary', onclick: () => authModal(api, () => { renderMe(); reloadWorld(); }) }, 'Войти'));
 		return;
 	}
-	box.appendChild(el('div', { class: 'me', onclick: openProfile },
-		el('span', { class: 'me-nick' }, me.nick),
-		el('span', { class: 'chip' }, 'ur ' + me.level),
-		el('span', { class: 'chip coins' }, fmt(me.coins) + ' ◉')
-	));
+	let card = box.querySelector('.me');
+	if (!card) {
+		box.innerHTML = '';
+		card = el('div', { class: 'me', onclick: openProfile },
+			el('span', { class: 'me-nick' }, me.nick),
+			el('span', { class: 'chip level' }, 'ur ' + me.level),
+			el('span', { class: 'chip coins' }, fmt(me.coins) + ' ◉')
+		);
+		box.appendChild(card);
+	}
+	const nick = card.querySelector('.me-nick');
+	if (nick && nick.dataset.nick !== me.nick) { nick.dataset.nick = me.nick; nick.textContent = me.nick; }
+	setCounter(card.querySelector('.chip.level'), 'ur ' + me.level);
+	setCounter(card.querySelector('.chip.coins'), fmt(me.coins) + ' ◉');
 	if (me.role === 'admin' || me.role === 'moderator') $('tabAdmin').style.display = '';
 }
 
