@@ -2,6 +2,7 @@ import { isVisible } from '../core/rules.mjs';
 import { ok } from './kit.mjs';
 
 const number = (value, fallback, min, max) => {
+	if (value === null || value === '') return fallback;
 	const parsed = Math.trunc(Number(value));
 	return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
 };
