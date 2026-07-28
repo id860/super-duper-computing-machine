@@ -1,25 +1,28 @@
-// Статические проверки v3: бесконечный мир, зона спавна, rAF, пиксельные иконки.
+// Static v3 checks kept aligned with the split model modules.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-
 const src = (f) => readFile(new URL('../' + f, import.meta.url), 'utf8');
 
+async function modelSource() {
+	return (await src('src/core/model-presets.mjs')) + '\n' + (await src('src/core/model-world.mjs'));
+}
+
 test('model: official world is infinite with 1000-cell spawn zone', async () => {
-	const s = await src('src/core/model.mjs');
+	const s = await modelSource();
 	assert.match(s, /SPAWN_SIZE\s*=\s*1000/);
-	assert.match(s, /infinite.*true|true.*infinite/);
+	assert.match(s, /infinite:\s*true/);
 	assert.match(s, /officialWorld/);
 });
 
 test('model: spawn XP multiplier is at least 2', async () => {
-	const s = await src('src/core/model.mjs');
+	const s = await modelSource();
 	assert.match(s, /SPAWN_XP_MULTIPLIER\s*=\s*[2-9]/);
 });
 
 test('model: eraser tool is absent', async () => {
-	const s = await src('src/core/model.mjs');
-	assert.doesNotMatch(s, /['"](eraser)['"]/);
+	const s = await modelSource();
+	assert.doesNotMatch(s, /['"]eraser['"]/);
 });
 
 test('api: publicWorld exposes infinite and spawn fields', async () => {
@@ -101,20 +104,8 @@ test('server-v3: automation tick and graceful shutdown present', async () => {
 	assert.match(s, /store\.flush/);
 });
 
-test('no GitHub tokens in any tracked source file', async () => {
+test('no GitHub tokens in tracked source files', async () => {
 	const pattern = /ghp_[A-Za-z0-9]{20,}/;
-	const files = [
-		'server-v3.mjs',
-		'public/index.html',
-		'src/http/api.mjs',
-		'src/core/model.mjs',
-		'public/app/engine.js',
-		'public/app/ui.js',
-		'public/app/ui-base.js',
-		'public/app/tools.js',
-		'public/app/tools-core.js',
-	];
-	for (const f of files) {
-		assert.doesNotMatch(await src(f), pattern, 'token found in ' + f);
-	}
+	const files = ['server-v3.mjs', 'public/index.html', 'src/http/api.mjs', 'src/core/model.mjs', 'src/core/model-world.mjs', 'public/app/engine.js', 'public/app/ui.js', 'public/app/ui-base.js', 'public/app/tools.js', 'public/app/tools-core.js'];
+	for (const f of files) assert.doesNotMatch(await src(f), pattern, 'token found in ' + f);
 });
