@@ -76,16 +76,22 @@ test('engine: offscreen minimap buffer', async () => {
 	assert.match(s, /drawImage/);
 });
 
-test('ui: pixel icons replace unicode tool symbols', async () => {
-	const s = await src('public/app/ui.js');
+test('ui-base: pixel icons replace unicode tool symbols', async () => {
+	const s = await src('public/app/ui-base.js');
 	assert.match(s, /ICON_BITS/);
 	assert.match(s, /export function toolIcon/);
 	assert.doesNotMatch(s, /ICON_BITS\.eraser/);
 });
 
-test('ui: tools import bresenham and rectCells from engine', async () => {
-	const s = await src('public/app/ui.js');
+test('tools: tools import bresenham and rectCells from engine', async () => {
+	const s = await src('public/app/tools.js');
 	assert.match(s, /import.*bresenham.*rectCells.*engine|import.*rectCells.*bresenham.*engine/);
+});
+
+test('ui: hub re-exports helpers and Tools', async () => {
+	const s = await src('public/app/ui.js');
+	assert.match(s, /export.*ui-base/);
+	assert.match(s, /export.*tools/);
 });
 
 test('server-v3: automation tick and graceful shutdown present', async () => {
@@ -104,6 +110,9 @@ test('no GitHub tokens in any tracked source file', async () => {
 		'src/core/model.mjs',
 		'public/app/engine.js',
 		'public/app/ui.js',
+		'public/app/ui-base.js',
+		'public/app/tools.js',
+		'public/app/tools-core.js',
 	];
 	for (const f of files) {
 		assert.doesNotMatch(await src(f), pattern, 'token found in ' + f);
