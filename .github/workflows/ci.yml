@@ -14,12 +14,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install pinned runtime dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
       - name: Validate server and scale modules
         run: |
           node --check server-v3.mjs
           node --check worker-v3.mjs
           node --check src/http/api.mjs
           node --check src/http/chunks.mjs
+          node --check src/http/sse.mjs
           node --check src/http/metrics.mjs
           node --check src/http/world-bootstrap.mjs
           node --check src/http/player-preferences.mjs
@@ -34,6 +37,7 @@ jobs:
           node --check public/app/viewport-cache.js
           node --check public/app/chunk-lru.js
           node --check public/app/chunk-queue.js
+          node --check public/app/chunk-consistency.js
           node --check public/app/chunk-store.js
           node --check public/app/chunk-prefetch.js
           node --check public/app/tile-grid.js
