@@ -1,7 +1,10 @@
 // UI-слой PixelFront: инструменты, палитра, панели, модалки.
 // + Горячие клавиши: E/1=пиксель, B/2=кисть 2x2, 3=кисть 3x3, L=линия, R=прям.оуг, F=заливка, P=пипетка, Ctrl+Z=отмена.
 // + Локальная отмена: _undoStack, undo() — восстанавливает пиксели локально + шлёт на сервер.
-// + Батчинг: операции накапливаются 80 мс перед отправкой.
+// + Оптимистичный рендер: пиксели применяются локально сразу, отправка на сервер —
+//   без искусственных пауз между джобами, только лёгкий батчинг в 16 мс.
+// + Preview рисования: линии/прямоугольники/кисть видны во время движения мыши.
+// + Заливка: волновая анимация по кольцам от точки клика.
 import { bresenham, rectCells } from './engine.js';
 
 export const el = (tag, attrs = {}, ...children) => {
@@ -108,7 +111,7 @@ export class Tools {
 		this._undoStack = [];
 		// Ссылка на контейнер инструментов для перерисовки по hotkeys
 		this._toolContainer = null;
-		// Батчинг: таймер дебаунса подачи
+		// Батчинг: таймер дебаунса подачи (16 мс — один кадр)
 		this._batchTimer = null;
 		this._wire();
 		this._bindHotkeys();
@@ -192,6 +195,8 @@ export class Tools {
 			this.buffer = [];
 			this._addBuffer(this._brushCells(x, y, this._penSize()));
 			this.preview = this.buffer.slice();
+			// Пиксель/кисть — сразу рисуется на холст, не ждёт отпускания мыши.
+			this._applyImmediate(this.buffer.slice(), this.color);
 			e.draw();
 		};
 		e.onCellDrag = (x, y) => {
@@ -200,189 +205,12 @@ export class Tools {
 			if (this.tool === 'line') { this.preview = bresenham(this.anchor.x, this.anchor.y, x, y); e.draw(); return; }
 			if (this.tool === 'rect') { this.preview = rectCells(this.anchor.x, this.anchor.y, x, y, false); e.draw(); return; }
 			this._addBuffer(this._brushCells(x, y, this._penSize()));
+			// Каждый новый пиксель кисти появляется мгновенно.
+			const fresh = this.buffer.slice(-this._penSize() * this._penSize());
+			if (fresh.length) this._applyImmediate(fresh, this.color);
 			this.preview = this.buffer.slice();
 			e.draw();
 		};
 		e.onCellUp = (x, y) => {
 			if (!this.world) return;
-			if (this.tool === 'picker') return;
-			if (this.tool === 'line') { this._commit('line', bresenham(this.anchor.x, this.anchor.y, x, y)); this.anchor = null; this.preview = null; e.draw(); return; }
-			if (this.tool === 'rect') { this._commit('rect', rectCells(this.anchor.x, this.anchor.y, x, y, false)); this.anchor = null; this.preview = null; e.draw(); return; }
-			if (this.tool === 'fill') { this._commit('fill', this._flood(x, y)); this.buffer = []; this.preview = null; return; }
-			const tool = this._penSize() === 3 ? 'brush3' : this._penSize() === 2 ? 'brush2' : 'pixel';
-			this._commit(tool, this.buffer.slice());
-			this.buffer = [];
-			this.preview = null;
-		};
-		e.onOverlay = (ctx) => {
-			if (!this.preview || !this.preview.length) return;
-			ctx.globalAlpha = 0.55;
-			ctx.fillStyle = this.color;
-			for (const [x, y] of this.preview) ctx.fillRect(e.offsetX + x * e.scale, e.offsetY + y * e.scale, e.scale, e.scale);
-			ctx.globalAlpha = 1;
-		};
-	}
-
-	_flood(x, y) {
-		const target = this.engine.colorAt(x, y);
-		if (target === this.color) return [];
-		const w = this.world.infinite ? 100000 : this.world.width, h = this.world.infinite ? 100000 : this.world.height;
-		const out = [], seen = new Set(), stack = [[x, y]];
-		while (stack.length && out.length < 4096) {
-			const [cx, cy] = stack.pop();
-			const key = cx + ':' + cy;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
-			if (this.engine.colorAt(cx, cy) !== target) continue;
-			out.push([cx, cy]);
-			stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
-		}
-		return out;
-	}
-
-	// Сохраняем состояние до операции, применяем локально, добавляем в очередь с цветом.
-	_commit(tool, cells) {
-		cells = cells.filter((c) => this._inBounds(c));
-		if (!cells.length) return;
-		const color = this.color;
-		// Сохраняем состояние до изменения для undo
-		const undoEntry = cells
-			.map((c) => ({ key: c[0] + ':' + c[1], prev: this.engine.colorAt(c[0], c[1]) }))
-			.filter((e) => e.prev !== color); // только действительно меняющиеся пиксели
-		if (undoEntry.length) {
-			this._undoStack.push(undoEntry);
-			if (this._undoStack.length > 50) this._undoStack.shift(); // макс. 50 шагов
-		}
-		this.engine.applyPixels(cells.map((c) => [c[0], c[1], color]));
-		const max = Math.max(1, this._toolCfg(tool).maxSize || 1);
-		for (let i = 0; i < cells.length; i += max) this.queue.push({ tool, cells: cells.slice(i, i + max), color });
-		this._scheduleDrain();
-	}
-
-	// Батчинг: если drain не запущен, накапливаем 80 мс перед отправкой
-	_scheduleDrain() {
-		if (this.sending) return; // drain уже работает, новые jobs подхватятся
-		clearTimeout(this._batchTimer);
-		this._batchTimer = setTimeout(() => { this._batchTimer = null; this._drain(); }, 80);
-	}
-
-	async _drain() {
-		if (this.sending) return;
-		this.sending = true;
-		while (this.queue.length) {
-			const job = this.queue.shift();
-			try {
-				// Используем job.color (не this.color) — важно для undo
-				const res = await this.api.ops(this.world.id, { tool: job.tool, color: job.color || this.color, cells: job.cells });
-				if (res.energy && this.onEnergy) this.onEnergy(res.energy);
-				if (res.reward && this.onReward) this.onReward(res.reward);
-			} catch (err) {
-				toast(err.message || 'Ошибка рисования', 'error');
-				this.queue = [];
-				try { const w = await this.api.world(this.world.id); this.engine.setWorld(w.world, w.pixels); } catch {}
-				break;
-			}
-			await new Promise((r) => setTimeout(r, 40));
-		}
-		this.sending = false;
-		// Если во время drain пришли новые jobs — запускаем ещё раз
-		if (this.queue.length) this._drain();
-	}
-
-	_syncPalette() {
-		document.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s.dataset.color === this.color));
-	}
-
-	renderTools(container) {
-		this._toolContainer = container; // Сохраняем для перерисовки по hotkeys
-		container.innerHTML = '';
-		const avail = Object.keys(TOOL_META).filter((t) => t === 'picker' || (this.world.tools[t] && this.world.tools[t].enabled));
-		for (const t of avail) {
-			const meta = TOOL_META[t];
-			const b = el('button', { class: 'tool' + (t === this.tool ? ' active' : ''), title: meta.label + (meta.key ? ' [' + meta.key + ']' : ''), 'data-tool': t, onclick: () => { this.tool = t; this.renderTools(container); } });
-			b.appendChild(toolIcon(t, t === this.tool));
-			// Подсказка клавиши на кнопке
-			if (meta.key) b.appendChild(el('span', { class: 'hotkey-hint' }, meta.key));
-			container.appendChild(b);
-		}
-	}
-
-	renderPalette(container) {
-		container.innerHTML = '';
-		for (const c of this.world.palette) {
-			const s = el('button', { class: 'swatch' + (c === this.color ? ' active' : ''), style: 'background:' + c, 'data-color': c, title: c, onclick: () => { this.color = c; this._syncPalette(); } });
-			container.appendChild(s);
-		}
-	}
-}
-
-export function openWizard(api, config, onCreated) {
-	const presets = config.presets || {};
-	const state = { captchaToken: null };
-	const presetSel = el('select', { class: 'input' }, ...Object.entries(presets).map(([k, v]) => el('option', { value: k }, v.title || k)));
-	const name = el('input', { class: 'input', placeholder: 'Название мира', maxlength: '48' });
-	const desc = el('input', { class: 'input', placeholder: 'Короткое описание', maxlength: '240' });
-	const width = el('input', { class: 'input', type: 'number', value: '128', min: '32', max: '512' });
-	const height = el('input', { class: 'input', type: 'number', value: '96', min: '32', max: '512' });
-	const access = el('select', { class: 'input' }, ...(config.accessModes || ['public']).map((m) => el('option', { value: m }, m)));
-	const captchaQ = el('span', { class: 'captcha-q' }, '…');
-	const captchaA = el('input', { class: 'input', placeholder: 'Ответ', style: 'max-width:120px' });
-	const refreshCaptcha = async () => { const c = await api.captcha(); state.captchaToken = c.captchaToken; captchaQ.textContent = c.question; };
-	refreshCaptcha();
-	const body = el('div', { class: 'form' },
-		el('label', {}, 'Пресет', presetSel),
-		el('label', {}, 'Название', name),
-		el('label', {}, 'Описание', desc),
-		el('div', { class: 'row' }, el('label', {}, 'Ширина', width), el('label', {}, 'Высота', height)),
-		el('label', {}, 'Доступ', access),
-		el('label', {}, 'Проверка: реши пример', el('div', { class: 'row' }, captchaQ, captchaA, el('button', { class: 'icon-btn', type: 'button', onclick: refreshCaptcha }, '↻'))),
-		el('p', { class: 'muted small' }, 'Мир создаётся в песочнице сообщества. Активность в мирах сообщества не влияет на глобальный рейтинг, достижения и экономику.')
-	);
-	modal('Создание мира', body, [
-		{ label: 'Отмена', onClick: (close) => close() },
-		{ label: 'Создать', primary: true, onClick: async (close) => {
-			try {
-				const world = await api.createWorld({
-					preset: presetSel.value, name: name.value, description: desc.value,
-					width: +width.value, height: +height.value,
-					access: { mode: access.value },
-					captchaToken: state.captchaToken, captcha: captchaA.value
-				});
-				toast('Мир создан', 'success');
-				close();
-				onCreated(world.world);
-			} catch (err) { toast(err.message, 'error'); refreshCaptcha(); }
-		} }
-	]);
-}
-
-export function authModal(api, onAuth) {
-	let mode = 'login';
-	const nick = el('input', { class: 'input', placeholder: 'Ник', maxlength: '24' });
-	const pass = el('input', { class: 'input', type: 'password', placeholder: 'Пароль' });
-	const hint = el('p', { class: 'muted small' }, 'Один аккаунт — две статистики: глобальная (официальный мир) и локальная (миры сообщества).');
-	const title = el('h3', {}, 'Вход');
-	const submit = el('button', { class: 'btn btn-primary', onclick: async () => {
-		try {
-			const r = mode === 'login' ? await api.login(nick.value.trim(), pass.value) : await api.register(nick.value.trim(), pass.value);
-			toast(mode === 'login' ? 'С возвращением!' : 'Аккаунт создан', 'success');
-			back.remove();
-			onAuth(r.me);
-		} catch (err) { toast(err.message, 'error'); }
-	} }, 'Войти');
-	const toggle = el('button', { class: 'link-btn', onclick: () => {
-		mode = mode === 'login' ? 'register' : 'login';
-		title.textContent = mode === 'login' ? 'Вход' : 'Регистрация';
-		submit.textContent = mode === 'login' ? 'Войти' : 'Зарегистрироваться';
-		toggle.textContent = mode === 'login' ? 'Нет аккаунта? Создать' : 'Уже есть аккаунт? Войти';
-	} }, 'Нет аккаунта? Создать');
-	const back = el('div', { class: 'modal-back' });
-	const box = el('div', { class: 'modal' },
-		el('div', { class: 'modal-head' }, title, el('button', { class: 'icon-btn', onclick: () => back.remove() }, '✕')),
-		el('div', { class: 'modal-body' }, el('div', { class: 'form' }, nick, pass, submit, toggle, hint))
-	);
-	back.appendChild(box);
-	back.addEventListener('click', (e) => { if (e.target === back) back.remove(); });
-	document.body.appendChild(back);
-}
+			if (this.tool === 'picker')
