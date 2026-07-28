@@ -183,37 +183,4 @@ export class Tools {
 			if (this.tool === 'picker') { this.color = e.colorAt(x, y); this._syncPalette(); return; }
 			if (this.tool === 'line' || this.tool === 'rect') { this.anchor = { x, y }; return; }
 			this.buffer = [];
-			this._addBuffer(this._brushCells(x, y, this._penSize()));
-			this.preview = this.buffer.slice();
-			this._applyImmediate(this.buffer.slice(), this.color);
-			e.draw();
-		};
-		e.onCellDrag = (x, y) => {
-			if (!this.world) return;
-			if (this.tool === 'picker') return;
-			if (this.tool === 'line') { this.preview = bresenham(this.anchor.x, this.anchor.y, x, y); e.draw(); return; }
-			if (this.tool === 'rect') { this.preview = rectCells(this.anchor.x, this.anchor.y, x, y, false); e.draw(); return; }
-			this._addBuffer(this._brushCells(x, y, this._penSize()));
-			const fresh = this.buffer.slice(-this._penSize() * this._penSize());
-			if (fresh.length) this._applyImmediate(fresh, this.color);
-			this.preview = this.buffer.slice();
-			e.draw();
-		};
-		e.onCellUp = (x, y) => {
-			if (!this.world) return;
-			if (this.tool === 'picker') return;
-			if (this.tool === 'line') { this._commit('line', bresenham(this.anchor.x, this.anchor.y, x, y)); this.anchor = null; this.preview = null; e.draw(); return; }
-			if (this.tool === 'rect') { this._commit('rect', rectCells(this.anchor.x, this.anchor.y, x, y, false)); this.anchor = null; this.preview = null; e.draw(); return; }
-			if (this.tool === 'fill') { this._commitFill(this._flood(x, y)); return; }
-			const tool = this._penSize() === 3 ? 'brush3' : this._penSize() === 2 ? 'brush2' : 'pixel';
-			this._commit(tool, this.buffer.slice());
-			this.buffer = [];
-			this.preview = null;
-		};
-		e.onOverlay = (ctx) => this._drawOverlay(ctx, e);
-	}
-
-	_flood(x, y) {
-		const target = this.engine.colorAt(x, y);
-		if (target === this.color) return [];
-		const w = this.world.infinite ? 100000 : this
+			
