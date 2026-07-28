@@ -210,7 +210,4 @@ export class Tools {
 			if (fresh.length) this._applyImmediate(fresh, this.color);
 			this.preview = this.buffer.slice();
 			e.draw();
-		};
-		e.onCellUp = (x, y) => {
-			if (!this.world) return;
-			if (this.tool === 'picker')
+		
