@@ -18,20 +18,45 @@ const SLOTS = ['frame', 'nick', 'badge', 'trail', 'cursor'];
 const MARK_SLOTS = ['badge', 'trail', 'cursor'];
 const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок', trail: 'След', cursor: 'Курсор' };
 
-// ---------- Canvas: chunks are revealed the way map tiles are ----------
-// Borrowed from tile map engines (Leaflet, OSM, Google Maps):
-//   1. an area that is still loading is never left as a hole — the coarse
-//      overview that the minimap already holds is stretched over it, so the
-//      player sees a blurred low-resolution version of the art first;
-//   2. where not even an overview exists, a calm shimmer sweeps across the
-//      waiting tiles, the same idea as a content skeleton;
-//   3. when the real pixels arrive the placeholder dissolves into them over a
-//      short fade, in a slight cascade across the batch;
-//   4. nothing persists afterwards: no borders, no grid, no coloured squares.
-const SHIMMER_PERIOD_MS = 1600;
-const SHIMMER_BAND = 520; // Width of the travelling highlight, in screen pixels.
-const PREVIEW_ALPHA = 0.55;
-const SKELETON_ALPHA = 0.06;
+// ---------- Canvas: chunk loading, modelled on Our World of Pixels ----------
+// OWOP (OurSources/owop-client, canvas_renderer.js) does something deceptively
+// simple: while any chunk of the view is still missing it paints one repeating
+// "unloaded" pattern across the canvas, offset by the camera position so the
+// texture is glued to the world and slides with it. Loaded chunks are then
+// drawn on top, so the pattern only ever shows through the holes. There are no
+// per-chunk overlays, no borders and no blinking: the canvas reads as one
+// continuous surface that is gradually being filled in.
+//
+// We keep that model and add two touches from tile map engines:
+//   * the coarse overview the minimap already holds is stretched over a chunk
+//     that has not arrived yet, so the art shows up blurred before it is sharp;
+//   * arriving pixels develop out of the placeholder over a short fade instead
+//     of popping in.
+const UNLOADED_TILE = 24; // Pattern period in world-aligned screen pixels.
+const PREVIEW_ALPHA = 0.5;
+
+let unloadedPattern = null;
+
+// Built once, like OWOP's unloaded.png: a calm diagonal hatch, light enough to
+// read as "nothing here yet" rather than as content.
+function unloadedFill(ctx) {
+	if (unloadedPattern) return unloadedPattern;
+	const tile = document.createElement('canvas');
+	tile.width = tile.height = UNLOADED_TILE;
+	const tctx = tile.getContext('2d');
+	tctx.fillStyle = '#eef1f6';
+	tctx.fillRect(0, 0, UNLOADED_TILE, UNLOADED_TILE);
+	tctx.strokeStyle = '#e1e7f0';
+	tctx.lineWidth = 6;
+	tctx.beginPath();
+	tctx.moveTo(-UNLOADED_TILE, UNLOADED_TILE);
+	tctx.lineTo(UNLOADED_TILE, -UNLOADED_TILE);
+	tctx.moveTo(0, UNLOADED_TILE * 2);
+	tctx.lineTo(UNLOADED_TILE * 2, 0);
+	tctx.stroke();
+	unloadedPattern = ctx.createPattern(tile, 'repeat');
+	return unloadedPattern;
+}
 
 function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
 
@@ -45,8 +70,8 @@ function chunkRect(engine, key) {
 	return { x, y, span, cx, cy };
 }
 
-// Stretches the matching piece of the minimap buffer over a tile that has not
-// arrived yet — the classic "parent tile" placeholder of map engines.
+// Stretches the matching piece of the minimap buffer over a chunk that has not
+// arrived yet — the "parent tile" placeholder of map engines.
 function drawPreview(ctx, engine, rect) {
 	const mini = engine._mini;
 	const scale = engine._miniScale;
@@ -66,6 +91,20 @@ function drawPreview(ctx, engine, rect) {
 	} catch { return false; }
 }
 
+// Paints the OWOP pattern over the given rectangles in one pass. The pattern
+// origin is shifted by the camera offset, so the hatch belongs to the world and
+// pans with it instead of crawling across the screen.
+function fillUnloaded(ctx, engine, rects) {
+	const fill = unloadedFill(ctx);
+	if (!fill) return;
+	const ox = engine.offsetX % UNLOADED_TILE, oy = engine.offsetY % UNLOADED_TILE;
+	ctx.save();
+	ctx.translate(ox, oy);
+	ctx.fillStyle = fill;
+	for (const rect of rects) ctx.fillRect(rect.x - ox, rect.y - oy, rect.span, rect.span);
+	ctx.restore();
+}
+
 function drawChunkLoading(ctx, engine) {
 	const pending = engine._chunkPending, fading = engine._chunkFade;
 	const waiting = pending && pending.size, developing = fading && fading.size;
@@ -73,30 +112,15 @@ function drawChunkLoading(ctx, engine) {
 	const stamp = Date.now();
 	ctx.save();
 	if (waiting) {
-		const rects = [];
+		// A chunk still on the wire shows either the blurred overview or, when
+		// there is none, the world-anchored unloaded pattern.
+		const bare = [];
 		for (const key of pending) {
 			const rect = chunkRect(engine, key);
-			if (rect) rects.push(rect);
+			if (!rect) continue;
+			if (!drawPreview(ctx, engine, rect)) bare.push(rect);
 		}
-		// Low-resolution preview first, a flat wash where none is available.
-		const bare = [];
-		for (const rect of rects) if (!drawPreview(ctx, engine, rect)) bare.push(rect);
-		if (bare.length) {
-			ctx.fillStyle = `rgba(15, 23, 42, ${SKELETON_ALPHA})`;
-			for (const rect of bare) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
-		}
-		// One travelling highlight for the whole waiting area: it reads as a
-		// single loading surface instead of many separate blinking squares.
-		if (rects.length) {
-			const travel = engine.viewW + engine.viewH + SHIMMER_BAND * 2;
-			const head = ((stamp % SHIMMER_PERIOD_MS) / SHIMMER_PERIOD_MS) * travel - SHIMMER_BAND;
-			const gradient = ctx.createLinearGradient(head - SHIMMER_BAND, 0, head + SHIMMER_BAND, engine.viewH);
-			gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
-			gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.34)');
-			gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-			ctx.fillStyle = gradient;
-			for (const rect of rects) ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
-		}
+		if (bare.length) fillUnloaded(ctx, engine, bare);
 	}
 	// Arrived content develops out of its placeholder: the veil is painted in
 	// the world background so pixels emerge instead of popping in.
@@ -106,7 +130,7 @@ function drawChunkLoading(ctx, engine) {
 			const rect = chunkRect(engine, key);
 			if (!rect) continue;
 			const age = stamp - at;
-			if (age < 0) continue; // Staggered start: this tile has not begun yet.
+			if (age < 0) continue; // Staggered start: this chunk has not begun yet.
 			const alpha = 1 - easeOut(Math.min(1, age / CHUNK_FADE_MS));
 			if (alpha <= 0.01) continue;
 			ctx.globalAlpha = alpha;
