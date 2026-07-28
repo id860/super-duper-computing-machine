@@ -8,7 +8,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,40 +16,17 @@ jobs:
           node-version: 22
       - name: Install pinned runtime dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
-      - name: Validate server and scale modules
+      - name: Validate source syntax
         run: |
+          find src public/app scripts -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
           node --check server-v3.mjs
           node --check worker-v3.mjs
-          node --check src/http/api.mjs
-          node --check src/http/chunks.mjs
-          node --check src/http/sse.mjs
-          node --check src/http/metrics.mjs
-          node --check src/http/world-bootstrap.mjs
-          node --check src/http/player-preferences.mjs
-          node --check src/core/db.mjs
-          node --check src/core/model.mjs
-          node --check src/core/progress.mjs
-          node --check src/core/world-fixes.mjs
-          node --check src/core/postgres-mirror.mjs
-          node --check src/core/redis-runtime.mjs
-          node --check scripts/export-postgres.mjs
-          node --check public/app/interaction-patch.js
-          node --check public/app/viewport-cache.js
-          node --check public/app/chunk-lru.js
-          node --check public/app/chunk-queue.js
-          node --check public/app/chunk-consistency.js
-          node --check public/app/chunk-store.js
-          node --check public/app/chunk-prefetch.js
-          node --check public/app/tile-grid.js
-          node --check public/app/render-tiles.js
-          node --check public/app/minimap-nav.js
-          node --check public/app/experience-patch.js
-          node --check public/app/ui.js
-          node --check public/app/ui-base.js
-          node --check public/app/tools-core.js
-          node --check public/app/tools.js
-      - name: Verify unit, API and load contracts
-        run: npm test
+      - name: Core and rendering contracts
+        run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/chunk-lru.test.mjs test/chunk-queue.test.mjs test/chunk-consistency.test.mjs test/tile-grid.test.mjs test/minimap-nav.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs
+      - name: SSE and API contracts
+        run: node --test test/sse-replay.test.mjs test/api-chunks.test.mjs test/chat-cosmetics.test.mjs test/metrics.test.mjs
+      - name: Storage and load contracts
+        run: node --test test/export-postgres.test.mjs test/store-mirrors.test.mjs test/db-sections.test.mjs test/postgres-chunks.test.mjs test/load-chunks.test.mjs
   docker:
     runs-on: ubuntu-latest
     needs: smoke
