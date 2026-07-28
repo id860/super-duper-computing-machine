@@ -1,6 +1,6 @@
 import { clean, int, now, pick } from './util.mjs';
-import { PALETTE, PROTECTION_LEVELS, SPAWN_SIZE } from './model-presets.mjs';
-import { createUser, createWorld, defaultAccess, defaultCatalog, defaultChat, defaultEnergy, defaultLifecycle, defaultProtection, officialWorld } from './model-world.mjs';
+import { PALETTE, PROTECTION_LEVELS, SPAWN_SIZE, defaultAccess, defaultCatalog, defaultChat, defaultEnergy, defaultLifecycle, defaultProtection } from './model-presets.mjs';
+import { createUser, createWorld, officialWorld } from './model-world.mjs';
 
 export function migrate(raw) {
  const fresh = freshDb();
