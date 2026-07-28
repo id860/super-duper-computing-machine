@@ -59,6 +59,8 @@ export const token = (bytes = 32) => randomBytes(bytes).toString('hex');
 // Простейший in-memory rate limiter (для продакшена заменить на Redis).
 const buckets = new Map();
 export function limited(key, windowMs, max) {
+	// Рисование — основная интерактивная нагрузка: разрешаем больше вызовов.
+	if (key.startsWith('ops:')) max = Math.max(max, 120);
 	const t = now();
 	let bucket = buckets.get(key);
 	if (!bucket || bucket.until <= t) bucket = { hits: 0, until: t + windowMs };
