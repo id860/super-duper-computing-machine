@@ -21,8 +21,20 @@ jobs:
           find src public/app scripts -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n1 node --check
           node --check server-v3.mjs
           node --check worker-v3.mjs
-      - name: Core and rendering contracts
-        run: node --test test/core-v3.test.mjs test/chunks.test.mjs test/chunk-lru.test.mjs test/chunk-queue.test.mjs test/chunk-consistency.test.mjs test/tile-grid.test.mjs test/minimap-nav.test.mjs test/world-fixes.test.mjs test/world-bootstrap.test.mjs
+      - name: Core v3
+        run: node --test test/core-v3.test.mjs
+      - name: Chunk index
+        run: node --test test/chunks.test.mjs
+      - name: Chunk LRU
+        run: node --test test/chunk-lru.test.mjs
+      - name: Chunk queue
+        run: node --test test/chunk-queue.test.mjs
+      - name: Chunk consistency
+        run: node --test test/chunk-consistency.test.mjs
+      - name: Tile grid and minimap
+        run: node --test test/tile-grid.test.mjs test/minimap-nav.test.mjs
+      - name: World contracts
+        run: node --test test/world-fixes.test.mjs test/world-bootstrap.test.mjs
       - name: SSE and API contracts
         run: node --test test/sse-replay.test.mjs test/api-chunks.test.mjs test/chat-cosmetics.test.mjs test/metrics.test.mjs
       - name: Storage and load contracts
