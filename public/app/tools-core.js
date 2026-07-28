@@ -54,12 +54,16 @@ export class Tools {
 	async _drain() {
 		if (this.sending) return;
 		this.sending = true;
+		const MAX_CONCURRENT = 3;
 		while (this.queue.length) {
-			const job = this.queue.shift();
+			const batch = [];
+			for (let i = 0; i < MAX_CONCURRENT && this.queue.length; i++) batch.push(this.queue.shift());
 			try {
-				const res = await this.api.ops(this.world.id, { tool: job.tool, color: job.color || this.color, cells: job.cells });
-				if (res.energy && this.onEnergy) this.onEnergy(res.energy);
-				if (res.reward && this.onReward) this.onReward(res.reward);
+				const results = await Promise.all(batch.map((job) => this.api.ops(this.world.id, { tool: job.tool, color: job.color || this.color, cells: job.cells })));
+				for (const res of results) {
+					if (res.energy && this.onEnergy) this.onEnergy(res.energy);
+					if (res.reward && this.onReward) this.onReward(res.reward);
+				}
 			} catch (err) {
 				toast(err.message || 'Ошибка рисования', 'error');
 				this.queue = [];
