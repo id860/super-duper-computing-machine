@@ -1,9 +1,8 @@
 // UI-слой PixelFront: инструменты, палитра, панели, модалки.
 // + Горячие клавиши: E/1=пиксель, B/2=кисть 2x2, 3=кисть 3x3, L=линия, R=прям.оуг, F=заливка, P=пипетка, Ctrl+Z=отмена.
 // + Локальная отмена: _undoStack, undo() — восстанавливает пиксели локально + шлёт на сервер.
-// + Оптимистичный рендер: пиксели применяются локально сразу, отправка на сервер —
-//   без искусственных пауз между джобами, только лёгкий батчинг в 16 мс.
-// + Preview рисования: линии/прямоугольники/кисть видны во время движения мыши.
+// + Оптимистичный рендер: пиксели применяются локально сразу, отправка без лишних пауз.
+// + Preview: линии/прямоугольники/кисть видны во время движения мыши.
 // + Заливка: волновая анимация по кольцам от точки клика.
 import { bresenham, rectCells } from './engine.js';
 
@@ -43,7 +42,6 @@ export function modal(title, body, actions = []) {
 	return close;
 }
 
-// Пиксельные иконки инструментов: битовые карты 9×9, рисуются на canvas
 const ICON_BITS = {
 	pixel: [[3,3],[4,3],[5,3],[3,4],[4,4],[5,4],[3,5],[4,5],[5,5]],
 	brush2: [[2,2],[3,2],[2,3],[3,3],[6,2],[7,2],[6,3],[7,3],[2,6],[3,6],[2,7],[3,7],[6,6],[7,6],[6,7],[7,7]],
@@ -90,7 +88,6 @@ const TOOL_META = {
 	restore: { label: 'Восстановить' }
 };
 
-// Мапа клавиша → название инструмента
 const KEY_MAP = { 'e': 'pixel', '1': 'pixel', 'b': 'brush2', '2': 'brush2', '3': 'brush3', 'l': 'line', 'r': 'rect', 'f': 'fill', 'p': 'picker' };
 
 export class Tools {
@@ -107,11 +104,8 @@ export class Tools {
 		this.sending = false;
 		this.onReward = null;
 		this.onEnergy = null;
-		// Локальная отмена: каждый элемент = [{key, prev}]
 		this._undoStack = [];
-		// Ссылка на контейнер инструментов для перерисовки по hotkeys
 		this._toolContainer = null;
-		// Батчинг: таймер дебаунса подачи (16 мс — один кадр)
 		this._batchTimer = null;
 		this._wire();
 		this._bindHotkeys();
@@ -145,10 +139,8 @@ export class Tools {
 		for (const c of cells) { const k = c[0] + ':' + c[1]; if (!keys.has(k) && this._inBounds(c)) { keys.add(k); this.buffer.push(c); } }
 	}
 
-	// Горячие клавиши: E/B/3/L/R/F/P, Ctrl+Z
 	_bindHotkeys() {
 		window.addEventListener('keydown', (e) => {
-			// Не перехватываем пользовательский ввод в полях
 			const tag = document.activeElement ? document.activeElement.tagName : '';
 			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 			if (e.ctrlKey || e.metaKey) {
@@ -165,8 +157,6 @@ export class Tools {
 		});
 	}
 
-	// Локальная отмена последнего штриха. Восстанавливает пиксели локально
-	// и шлёт операции с предыдущими цветами на сервер.
 	undo() {
 		const entry = this._undoStack.pop();
 		if (!entry || !entry.length) { toast('Нечего отменять', 'info'); return; }
@@ -195,7 +185,6 @@ export class Tools {
 			this.buffer = [];
 			this._addBuffer(this._brushCells(x, y, this._penSize()));
 			this.preview = this.buffer.slice();
-			// Пиксель/кисть — сразу рисуется на холст, не ждёт отпускания мыши.
 			this._applyImmediate(this.buffer.slice(), this.color);
 			e.draw();
 		};
@@ -205,9 +194,26 @@ export class Tools {
 			if (this.tool === 'line') { this.preview = bresenham(this.anchor.x, this.anchor.y, x, y); e.draw(); return; }
 			if (this.tool === 'rect') { this.preview = rectCells(this.anchor.x, this.anchor.y, x, y, false); e.draw(); return; }
 			this._addBuffer(this._brushCells(x, y, this._penSize()));
-			// Каждый новый пиксель кисти появляется мгновенно.
 			const fresh = this.buffer.slice(-this._penSize() * this._penSize());
 			if (fresh.length) this._applyImmediate(fresh, this.color);
 			this.preview = this.buffer.slice();
 			e.draw();
-		
+		};
+		e.onCellUp = (x, y) => {
+			if (!this.world) return;
+			if (this.tool === 'picker') return;
+			if (this.tool === 'line') { this._commit('line', bresenham(this.anchor.x, this.anchor.y, x, y)); this.anchor = null; this.preview = null; e.draw(); return; }
+			if (this.tool === 'rect') { this._commit('rect', rectCells(this.anchor.x, this.anchor.y, x, y, false)); this.anchor = null; this.preview = null; e.draw(); return; }
+			if (this.tool === 'fill') { this._commitFill(this._flood(x, y)); return; }
+			const tool = this._penSize() === 3 ? 'brush3' : this._penSize() === 2 ? 'brush2' : 'pixel';
+			this._commit(tool, this.buffer.slice());
+			this.buffer = [];
+			this.preview = null;
+		};
+		e.onOverlay = (ctx) => this._drawOverlay(ctx, e);
+	}
+
+	_flood(x, y) {
+		const target = this.engine.colorAt(x, y);
+		if (target === this.color) return [];
+		const w = this.world.infinite ? 100000 : this
