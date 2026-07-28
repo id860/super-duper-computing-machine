@@ -1,16 +1,16 @@
 // Viewport chunk loader.
 //
-// Previous behaviour: one request per frame for a Chebyshev ring around the
-// centre chunk, radius clamped to 2. Zoomed out the viewport spans far more
-// than 5×5 chunks, so most of the screen never received data and the rings
-// serialised one round trip after another. The loader now asks for exactly the
-// chunks the viewport covers, in parallel batches, nearest to the centre of the
-// screen first, and paints anything already sitting in the local cache before
-// the network answers.
+// Requests exactly the chunks the viewport covers, in parallel batches, nearest
+// to the centre of the screen first, painting whatever the local cache already
+// holds before the network answers.
 //
-// Freshly arrived chunks are registered in `_chunkFlash` so the renderer can
-// briefly highlight them; the highlight fades on its own and leaves no
-// permanent grid behind.
+// Two invariants keep this loop safe:
+//   * every requested chunk is marked as visited, even when the server sends
+//     nothing back for it (empty areas carry no cells). Without this the
+//     "missing" list never shrank and the loader re-requested the same square
+//     every 40 ms forever, which froze the tab as soon as a player entered a
+//     world;
+//   * a follow-up pass only runs when the previous one actually made progress.
 import { PixelEngine } from './engine.js';
 import { evictChunkPixels, touchChunk } from './chunk-lru.js';
 import { chunkKey, planRequests, rangeKeys, rangeSize, viewportChunkRange } from './chunk-queue.js';
@@ -24,8 +24,24 @@ const FRESH_WINDOW_MS = 60000;
 const DEBOUNCE_MS = 40;
 const MAX_REQUESTS_PER_PASS = 12; // Guard against pathological zoom-outs.
 
-// How long the "chunk just arrived" highlight stays visible before it is gone.
-export const CHUNK_FLASH_MS = 850;
+// How long the "content just arrived" fade lasts.
+export const CHUNK_FADE_MS = 320;
+
+function planKeys(plan) {
+	const keys = [];
+	for (let y = plan.cy - plan.radius; y <= plan.cy + plan.radius; y++) {
+		for (let x = plan.cx - plan.radius; x <= plan.cx + plan.radius; x++) keys.push(chunkKey(x, y));
+	}
+	return keys;
+}
+
+PixelEngine.prototype._chunkState = function () {
+	if (!this._loadedChunks) this._loadedChunks = new Set();
+	if (!this._chunkAccess) this._chunkAccess = new Map();
+	if (!this._chunkFade) this._chunkFade = new Map();
+	if (!this._chunkPending) this._chunkPending = new Set();
+	return this._loadedChunks;
+};
 
 PixelEngine.prototype._scheduleChunkLoad = function () {
 	if (!this.world || !this.world.infinite) return;
@@ -36,49 +52,62 @@ PixelEngine.prototype._scheduleChunkLoad = function () {
 	}, DEBOUNCE_MS);
 };
 
-// Keeps the highlight animating until every pulse has faded, then stops so an
-// idle canvas costs nothing.
-PixelEngine.prototype._runChunkFlash = function () {
-	if (this._chunkFlashFrame || typeof requestAnimationFrame !== 'function') return;
+// Keeps the canvas animating while something is still loading or fading, then
+// stops so an idle canvas costs nothing.
+PixelEngine.prototype._runChunkAnimation = function () {
+	if (this._chunkAnimFrame || typeof requestAnimationFrame !== 'function') return;
 	const step = () => {
-		this._chunkFlashFrame = null;
+		this._chunkAnimFrame = null;
 		const stamp = Date.now();
-		for (const [key, at] of this._chunkFlash) if (stamp - at > CHUNK_FLASH_MS) this._chunkFlash.delete(key);
+		for (const [key, at] of this._chunkFade) if (stamp - at > CHUNK_FADE_MS) this._chunkFade.delete(key);
 		this.draw();
-		if (this._chunkFlash.size) this._chunkFlashFrame = requestAnimationFrame(step);
+		if (this._chunkFade.size || this._chunkPending.size) this._chunkAnimFrame = requestAnimationFrame(step);
 	};
-	this._chunkFlashFrame = requestAnimationFrame(step);
+	this._chunkAnimFrame = requestAnimationFrame(step);
 };
 
-PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
-	if (!this._loadedChunks) this._loadedChunks = new Set();
-	if (!this._chunkAccess) this._chunkAccess = new Map();
-	if (!this._chunkFlash) this._chunkFlash = new Map();
+// Marks chunks as visited so they are never requested again, whether or not
+// they carried any pixels.
+PixelEngine.prototype._markChunks = function (keys, stamp, limit) {
+	this._chunkState();
 	const cap = Math.max(MIN_TRACKED_CHUNKS, limit || 0);
-	const stamp = Date.now(), freshBefore = stamp - FRESH_WINDOW_MS;
-	const cells = [];
-	let dropped = 0, pulses = 0;
-	for (const chunk of chunks || []) {
-		for (const cell of chunk.cells || []) cells.push(cell);
-		if (!track) continue;
-		const key = chunkKey(chunk.x, chunk.y);
-		// Only chunks that were genuinely missing pulse, so panning back over
-		// already loaded ground stays calm.
-		if (!this._loadedChunks.has(key)) { this._chunkFlash.set(key, stamp); pulses += 1; }
+	const freshBefore = stamp - FRESH_WINDOW_MS;
+	let dropped = 0;
+	for (const key of keys) {
 		this._loadedChunks.add(key);
+		this._chunkPending.delete(key);
 		for (const stale of touchChunk(this._chunkAccess, key, stamp, cap)) {
 			this._loadedChunks.delete(stale);
-			this._chunkFlash.delete(stale);
+			this._chunkFade.delete(stale);
 			dropped += evictChunkPixels(this.pixels, stale, CHUNK_SIZE, freshBefore);
 		}
 	}
+	return dropped;
+};
+
+PixelEngine.prototype._absorbChunks = function (chunks, track, limit) {
+	this._chunkState();
+	const stamp = Date.now();
+	const cells = [];
+	const keys = [];
+	let dropped = 0, faded = 0;
+	for (const chunk of chunks || []) {
+		const count = chunk.cells?.length || 0;
+		for (const cell of chunk.cells || []) cells.push(cell);
+		if (!track) continue;
+		const key = chunkKey(chunk.x, chunk.y);
+		// Only chunks that actually bring content fade in: blank areas must not
+		// blink as empty squares all over the canvas.
+		if (count && !this._loadedChunks.has(key)) { this._chunkFade.set(key, stamp); faded += 1; }
+		keys.push(key);
+	}
+	if (keys.length) dropped = this._markChunks(keys, stamp, limit);
 	if (cells.length) this.applyPixels(cells);
 	if (dropped) {
 		if (this.invalidateAllTiles) this.invalidateAllTiles();
 		this._miniDirty = true;
-		this.draw();
 	}
-	if (pulses) this._runChunkFlash();
+	if (faded || dropped) this._runChunkAnimation();
 	return cells.length;
 };
 
@@ -98,6 +127,10 @@ PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generatio
 				if (generation !== this._chunkGeneration) return;
 				const chunks = data.chunks || [];
 				this._absorbChunks(chunks, true, limit);
+				// The response only lists chunks that hold pixels; the rest of the
+				// requested square is empty and must be remembered as visited.
+				this._markChunks(planKeys(plan), Date.now(), limit);
+				this.draw();
 				writeCachedChunks(worldId, chunks).catch(() => { /* Cache writes are optional. */ });
 			} catch { /* Network errors retry after the next viewport change. */ }
 		}
@@ -109,7 +142,7 @@ PixelEngine.prototype._runChunkPlans = async function (worldId, plans, generatio
 
 PixelEngine.prototype._loadViewportChunks = async function () {
 	if (!this.world || !this.world.infinite || this._chunkLoading) return;
-	if (!this._loadedChunks) this._loadedChunks = new Set();
+	this._chunkState();
 	const view = { offsetX: this.offsetX, offsetY: this.offsetY, scale: this.scale, viewW: this.viewW, viewH: this.viewH };
 	const range = viewportChunkRange(view, CHUNK_SIZE);
 	const visible = rangeSize(range);
@@ -119,7 +152,9 @@ PixelEngine.prototype._loadViewportChunks = async function () {
 	const worldId = this._chunkWorldId || this.world.id;
 	const generation = (this._chunkGeneration = (this._chunkGeneration || 0) + 1);
 	const missing = rangeKeys(range).filter((key) => !this._loadedChunks.has(key));
-	if (!missing.length) return;
+	if (!missing.length) { this._chunkPending.clear(); return; }
+	this._chunkPending = new Set(missing);
+	this._runChunkAnimation();
 	this._chunkLoading = true;
 	try {
 		// Cache-first pass: paint what the browser already stores, then let the
@@ -134,7 +169,13 @@ PixelEngine.prototype._loadViewportChunks = async function () {
 		const plans = planRequests(range, this._loadedChunks, center, REQUEST_RADIUS).slice(0, MAX_REQUESTS_PER_PASS);
 		if (!plans.length) return;
 		await this._runChunkPlans(worldId, plans, generation, limit);
-	} finally { this._chunkLoading = false; }
-	// A wide zoom-out can exceed the per-pass budget; continue with the rest.
-	if (generation === this._chunkGeneration) this._scheduleChunkLoad();
+	} finally {
+		this._chunkLoading = false;
+		if (generation === this._chunkGeneration) this._chunkPending.clear();
+	}
+	if (generation !== this._chunkGeneration) return;
+	// Continue only while passes keep shrinking the backlog: a wide zoom-out
+	// exceeds the per-pass budget, but a stalled pass must never respawn itself.
+	const left = rangeKeys(range).filter((key) => !this._loadedChunks.has(key)).length;
+	if (left && left < missing.length) this._scheduleChunkLoad();
 };
