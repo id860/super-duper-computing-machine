@@ -11,7 +11,7 @@ services:
       APP_ORIGIN: ${APP_ORIGIN:-}
       DATABASE_URL: ${DATABASE_URL:-}
       REDIS_URL: ${REDIS_URL:-}
-      CHUNK_READ_MODE: ${CHUNK_READ_MODE:-json}
+      CHUNK_READ_MODE: ${CHUNK_READ_MODE:-auto}
       API_RATE_LIMIT: ${API_RATE_LIMIT:-300}
       AUTOMATION_MODE: ${AUTOMATION_MODE:-inline}
     volumes:
