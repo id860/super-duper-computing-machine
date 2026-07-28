@@ -5,10 +5,13 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 	<title>PixelFront Worlds</title>
 	<meta name="description" content="Автономная платформа пиксельных миров: официальный мир и песочницы сообщества." />
+	<meta name="theme-color" content="#0d0f14" />
+	<meta name="mobile-web-app-capable" content="yes" />
+	<link rel="manifest" href="/manifest.webmanifest" />
 	<link rel="stylesheet" href="./styles.css" />
 	<link rel="stylesheet" href="./experience.css" />
 	<link rel="stylesheet" href="./cosmetics.css" />
-	<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230d0f14'/%3E%3Crect x='3' y='3' width='4' height='4' fill='%234ea1ff'/%3E%3Crect x='9' y='3' width='4' height='4' fill='%23e5d900'/%3E%3Crect x='3' y='9' width='4' height='4' fill='%2302be01'/%3E%3Crect x='9' y='9' width='4' height='4' fill='%23e50000'/%3E%3C/svg%3E" />
+	<link rel="icon" href="/icon.svg" />
 </head>
 <body>
 	<header id="topbar"><div class="brand"><span class="brand-mark">▣</span> PixelFront <span class="brand-sub">Worlds</span></div><div class="world-info"><span id="worldType" class="badge badge-official">ОФИЦИАЛЬНЫЙ</span><span id="worldName">…</span></div><div class="energy"><div class="energy-bar"><div id="energyFill" class="energy-fill"></div></div><span id="energyText" class="small">—</span></div><div id="userBox" class="user-box"></div></header>
@@ -20,6 +23,7 @@
 	<script type="module" src="./app/render-tiles.js"></script>
 	<script type="module" src="./app/minimap-nav.js"></script>
 	<script type="module" src="./app/experience-patch.js"></script>
+	<script type="module" src="./app/pwa.js"></script>
 	<script type="module" src="./app/main.js"></script>
 </body>
 </html>
