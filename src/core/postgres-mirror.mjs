@@ -6,22 +6,29 @@ export function groupPixelsByChunk(pixels) {
 	for (const entry of pixels || []) {
 		const x = Number(entry?.[0]), y = Number(entry?.[1]);
 		if (!Number.isInteger(x) || !Number.isInteger(y)) continue;
-		const key = keyFor(x, y);
-		let group = groups.get(key);
-		if (!group) groups.set(key, (group = []));
-		group.push([x, y, entry[2]]);
+		const key = keyFor(x, y); let group = groups.get(key);
+		if (!group) groups.set(key, (group = [])); group.push([x, y, entry[2]]);
 	}
 	return groups;
 }
 
 export function applyChunkPixels(cells, pixels, background) {
 	const next = { ...(cells || {}) };
-	for (const [x, y, color] of pixels || []) {
-		const key = `${x}:${y}`;
-		if (color === background) delete next[key];
-		else next[key] = { c: color };
-	}
+	for (const [x, y, color] of pixels || []) { const key = `${x}:${y}`; if (color === background) delete next[key]; else next[key] = { c: color }; }
 	return next;
+}
+
+export function hydrateWorldRows(db, worldRows, chunkRows) {
+	if (!worldRows?.length) return 0;
+	for (const row of worldRows) {
+		const current = db.worlds[row.id] || {};
+		db.worlds[row.id] = { ...current, ...(row.payload || {}), id: row.id, pixels: {}, pixelHistory: current.pixelHistory || [] };
+	}
+	for (const row of chunkRows || []) {
+		const world = db.worlds[row.world_id];
+		if (world) Object.assign(world.pixels, row.cells || {});
+	}
+	return worldRows.length;
 }
 
 export async function createPostgresMirror(connectionString) {
@@ -32,6 +39,18 @@ export async function createPostgresMirror(connectionString) {
 	let chain = Promise.resolve(), bootstrapped = false;
 	const enqueue = (task) => { chain = chain.then(task, task); return chain; };
 
+	async function hydrate(db) {
+		return enqueue(async () => {
+			const [worldResult, chunkResult] = await Promise.all([
+				pool.query('SELECT id, payload FROM worlds ORDER BY id'),
+				pool.query('SELECT world_id, cells FROM world_chunks ORDER BY world_id, chunk_y, chunk_x')
+			]);
+			const count = hydrateWorldRows(db, worldResult.rows, chunkResult.rows);
+			if (count) bootstrapped = true;
+			return count;
+		});
+	}
+
 	async function bootstrap(db) {
 		return enqueue(async () => {
 			const client = await pool.connect();
@@ -41,15 +60,9 @@ export async function createPostgresMirror(connectionString) {
 					const payload = { ...world, pixels: undefined, pixelHistory: undefined };
 					await client.query('INSERT INTO worlds (id, payload, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()', [world.id, JSON.stringify(payload)]);
 					const buckets = new Map();
-					for (const [cellKey, cell] of Object.entries(world.pixels || {})) {
-						const i = cellKey.indexOf(':'), x = Number(cellKey.slice(0, i)), y = Number(cellKey.slice(i + 1)), key = keyFor(x, y);
-						let cells = buckets.get(key); if (!cells) buckets.set(key, (cells = {})); cells[cellKey] = cell;
-					}
+					for (const [cellKey, cell] of Object.entries(world.pixels || {})) { const i = cellKey.indexOf(':'), x = Number(cellKey.slice(0, i)), y = Number(cellKey.slice(i + 1)), key = keyFor(x, y); let cells = buckets.get(key); if (!cells) buckets.set(key, (cells = {})); cells[cellKey] = cell; }
 					await client.query('DELETE FROM world_chunks WHERE world_id = $1', [world.id]);
-					for (const [key, cells] of buckets) {
-						const [x, y] = key.split(':').map(Number);
-						await client.query('INSERT INTO world_chunks (world_id, chunk_x, chunk_y, cells, revision) VALUES ($1, $2, $3, $4::jsonb, $5)', [world.id, x, y, JSON.stringify(cells), Date.now()]);
-					}
+					for (const [key, cells] of buckets) { const [x, y] = key.split(':').map(Number); await client.query('INSERT INTO world_chunks (world_id, chunk_x, chunk_y, cells, revision) VALUES ($1, $2, $3, $4::jsonb, $5)', [world.id, x, y, JSON.stringify(cells), Date.now()]); }
 				}
 				await client.query('COMMIT'); bootstrapped = true;
 			} catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
@@ -59,17 +72,11 @@ export async function createPostgresMirror(connectionString) {
 
 	async function write(db) {
 		if (!bootstrapped) return bootstrap(db);
-		return enqueue(async () => {
-			for (const world of Object.values(db.worlds || {})) {
-				const payload = { ...world, pixels: undefined, pixelHistory: undefined };
-				await pool.query('INSERT INTO worlds (id, payload, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()', [world.id, JSON.stringify(payload)]);
-			}
-		});
+		return enqueue(async () => { for (const world of Object.values(db.worlds || {})) { const payload = { ...world, pixels: undefined, pixelHistory: undefined }; await pool.query('INSERT INTO worlds (id, payload, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()', [world.id, JSON.stringify(payload)]); } });
 	}
 
 	async function writePixels(worldId, pixels, background) {
-		const groups = groupPixelsByChunk(pixels);
-		if (!groups.size) return;
+		const groups = groupPixelsByChunk(pixels); if (!groups.size) return;
 		return enqueue(async () => {
 			const client = await pool.connect();
 			try {
@@ -94,5 +101,5 @@ export async function createPostgresMirror(connectionString) {
 		return out;
 	}
 
-	return { bootstrap, write, writePixels, readChunks, async close() { await chain.catch(() => {}); await pool.end(); } };
+	return { hydrate, bootstrap, write, writePixels, readChunks, async close() { await chain.catch(() => {}); await pool.end(); } };
 }
