@@ -1,30 +1,4 @@
 <!DOCTYPE html>
-<html lang="ru">
-<head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-	<title>PixelFront Worlds</title>
-	<meta name="description" content="Автономная платформа пиксельных миров: официальный мир и песочницы сообщества." />
-	<meta name="theme-color" content="#111827" />
-	<meta name="mobile-web-app-capable" content="yes" />
-	<link rel="manifest" href="/manifest.webmanifest" />
-	<link rel="stylesheet" href="./styles.css" />
-	<link rel="stylesheet" href="./experience.css" />
-	<link rel="stylesheet" href="./cosmetics.css" />
-	<link rel="stylesheet" href="./design-refresh.css" />
-	<link rel="icon" href="/icon.svg" />
-</head>
-<body>
-	<header id="topbar"><div class="brand"><span class="brand-mark">▣</span> PixelFront <span class="brand-sub">Worlds</span></div><div class="world-info"><span id="worldType" class="badge badge-official">ОФИЦИАЛЬНЫЙ</span><span id="worldName">…</span></div><div class="energy"><div class="energy-bar"><div id="energyFill" class="energy-fill"></div></div><span id="energyText" class="small">—</span></div><div id="userBox" class="user-box"></div></header>
-	<main id="layout"><aside id="toolbar"><div id="tools" class="tools"></div><div class="divider"></div><div id="palette" class="palette"></div></aside><section id="stage"><canvas id="canvas"></canvas><div id="notice" class="notice-bar"></div><div class="stage-overlay"><canvas id="minimap" width="160" height="120"></canvas><div class="zoom-ctrl"><button id="zoomIn" class="icon-btn" title="Приблизить">+</button><button id="zoomOut" class="icon-btn" title="Отдалить">−</button><button id="zoomFit" class="icon-btn" title="Вся карта">□</button></div><div id="coords" class="coords">0, 0</div></div></section><aside id="sidebar"><nav class="tabs"><button class="tab active" data-tab="chat">Чат</button><button class="tab" data-tab="catalog">Каталог</button><button class="tab" data-tab="rank">Рейтинг</button><button class="tab" data-tab="quests">Задания</button><button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Админ</button></nav><div id="panelBody" class="panel-body"></div></aside></main>
-	<div id="toasts"></div>
-	<script type="module" src="./app/interaction-patch.js"></script>
-	<script type="module" src="./app/viewport-cache.js"></script>
-	<script type="module" src="./app/chunk-prefetch.js"></script>
-	<script type="module" src="./app/render-tiles.js"></script>
-	<script type="module" src="./app/minimap-nav.js"></script>
-	<script type="module" src="./app/experience-patch.js"></script>
-	<script type="module" src="./app/pwa.js"></script>
-	<script type="module" src="./app/main.js"></script>
-</body>
-</html>
+<html lang="ru"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" /><title>PixelFront Worlds</title><meta name="description" content="Автономная платформа пиксельных миров: официальный мир и песочницы сообщества." /><meta name="theme-color" content="#111827" /><meta name="mobile-web-app-capable" content="yes" /><link rel="manifest" href="/manifest.webmanifest" /><link rel="stylesheet" href="./styles.css" /><link rel="stylesheet" href="./experience.css" /><link rel="stylesheet" href="./cosmetics.css" /><link rel="stylesheet" href="./design-refresh.css" /><link rel="stylesheet" href="./regression-fixes.css" /><link rel="icon" href="/icon.svg" /></head>
+<body><header id="topbar"><div class="brand"><span class="brand-mark">▣</span> PixelFront <span class="brand-sub">Worlds</span></div><div class="world-info"><span id="worldType" class="badge badge-official">ОФИЦИАЛЬНЫЙ</span><span id="worldName">…</span></div><div class="energy"><div class="energy-bar"><div id="energyFill" class="energy-fill"></div></div><span id="energyText" class="small">—</span></div><div id="userBox" class="user-box"></div></header><main id="layout"><aside id="toolbar"><div id="tools" class="tools"></div><div class="divider"></div><div id="palette" class="palette"></div></aside><section id="stage"><canvas id="canvas"></canvas><div id="notice" class="notice-bar"></div><div class="stage-overlay"><canvas id="minimap" width="160" height="120"></canvas><div class="zoom-ctrl"><button id="zoomIn" class="icon-btn" title="Приблизить">+</button><button id="zoomOut" class="icon-btn" title="Отдалить">−</button><button id="zoomFit" class="icon-btn" title="Вся карта">□</button></div><div id="coords" class="coords">0, 0</div></div></section><aside id="sidebar"><nav class="tabs"><button class="tab active" data-tab="chat">Чат</button><button class="tab" data-tab="catalog">Каталог</button><button class="tab" data-tab="rank">Рейтинг</button><button class="tab" data-tab="quests">Задания</button><button class="tab" id="tabAdmin" data-tab="admin" style="display:none">Админ</button></nav><div id="panelBody" class="panel-body"></div></aside></main><div id="toasts"></div>
+<script type="module" src="./app/interaction-patch.js"></script><script type="module" src="./app/viewport-cache.js"></script><script type="module" src="./app/chunk-prefetch.js"></script><script type="module" src="./app/render-tiles.js"></script><script type="module" src="./app/minimap-nav.js"></script><script type="module" src="./app/experience-patch.js"></script><script type="module" src="./app/regression-fixes.js"></script><script type="module" src="./app/pwa.js"></script><script type="module" src="./app/main.js"></script></body></html>
