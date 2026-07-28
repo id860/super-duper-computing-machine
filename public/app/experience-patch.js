@@ -20,20 +20,20 @@ const SLOT_TITLES = { frame: 'Рамка', nick: 'Ник', badge: 'Значок'
 
 // ---------- Canvas: chunk loading, modelled on Our World of Pixels ----------
 // OWOP (OurSources/owop-client, canvas_renderer.js) does something deceptively
-// simple: while any chunk of the view is still missing it paints one repeating
-// "unloaded" pattern across the canvas, offset by the camera position so the
-// texture is glued to the world and slides with it. Loaded chunks are then
-// drawn on top, so the pattern only ever shows through the holes. There are no
-// per-chunk overlays, no borders and no blinking: the canvas reads as one
-// continuous surface that is gradually being filled in.
+// simple: everything that is not a loaded chunk is covered by one repeating
+// "unloaded" texture, offset by the camera position so the pattern belongs to
+// the world and pans with it. Loaded chunks are drawn on top, so the texture
+// only ever shows through the holes and vanishes area by area as the world
+// arrives. There are no per-chunk overlays, borders or blinking.
 //
-// We keep that model and add two touches from tile map engines:
-//   * the coarse overview the minimap already holds is stretched over a chunk
-//     that has not arrived yet, so the art shows up blurred before it is sharp;
-//   * arriving pixels develop out of the placeholder over a short fade instead
-//     of popping in.
+// The first attempt painted the texture only over chunks with a request in
+// flight. That set is emptied the moment a batch finishes, so the placeholder
+// flashed for a few frames at most and looked like it was missing entirely.
+// The texture now covers every viewport chunk the loader has not confirmed,
+// exactly like OWOP, and a chunk that arrives develops out of it.
 const UNLOADED_TILE = 24; // Pattern period in world-aligned screen pixels.
 const PREVIEW_ALPHA = 0.5;
+const MAX_PATTERN_CHUNKS = 1600; // Guard against a pathological zoom-out.
 
 let unloadedPattern = null;
 
@@ -70,8 +70,29 @@ function chunkRect(engine, key) {
 	return { x, y, span, cx, cy };
 }
 
-// Stretches the matching piece of the minimap buffer over a chunk that has not
-// arrived yet — the "parent tile" placeholder of map engines.
+// Every chunk the viewport covers that the loader has not confirmed yet. This
+// is deliberately independent of the request queue: a chunk stays "unloaded"
+// until its pixels are in, whether it is queued, in flight or not asked for.
+function missingChunkRects(engine) {
+	const span = FINE_CHUNK_SIZE * engine.scale;
+	if (!(span > 0)) return [];
+	const loaded = engine._loadedChunks;
+	const x0 = Math.floor(-engine.offsetX / span), x1 = Math.floor((engine.viewW - engine.offsetX) / span);
+	const y0 = Math.floor(-engine.offsetY / span), y1 = Math.floor((engine.viewH - engine.offsetY) / span);
+	if ((x1 - x0 + 1) * (y1 - y0 + 1) > MAX_PATTERN_CHUNKS) return [];
+	const rects = [];
+	for (let cy = y0; cy <= y1; cy++) {
+		for (let cx = x0; cx <= x1; cx++) {
+			if (cx < 0 || cy < 0) continue; // The world starts at (0, 0).
+			if (loaded && loaded.has(cx + ':' + cy)) continue;
+			rects.push({ x: engine.offsetX + cx * span, y: engine.offsetY + cy * span, span, cx, cy });
+		}
+	}
+	return rects;
+}
+
+// Stretches the matching piece of the minimap buffer over a chunk that is still
+// developing — the "parent tile" placeholder of map engines.
 function drawPreview(ctx, engine, rect) {
 	const mini = engine._mini;
 	const scale = engine._miniScale;
@@ -83,15 +104,13 @@ function drawPreview(ctx, engine, rect) {
 	if (sx + size <= 0 || sy + size <= 0 || sx >= mini.width || sy >= mini.height) return false;
 	try {
 		ctx.imageSmoothingEnabled = true; // Blur it on purpose: it is a preview.
-		ctx.globalAlpha = PREVIEW_ALPHA;
 		ctx.drawImage(mini, sx, sy, size, size, rect.x, rect.y, rect.span, rect.span);
-		ctx.globalAlpha = 1;
 		ctx.imageSmoothingEnabled = false;
 		return true;
 	} catch { return false; }
 }
 
-// Paints the OWOP pattern over the given rectangles in one pass. The pattern
+// Paints the OWOP texture over the given rectangles in one pass. The pattern
 // origin is shifted by the camera offset, so the hatch belongs to the world and
 // pans with it instead of crawling across the screen.
 function fillUnloaded(ctx, engine, rects) {
@@ -106,26 +125,19 @@ function fillUnloaded(ctx, engine, rects) {
 }
 
 function drawChunkLoading(ctx, engine) {
-	const pending = engine._chunkPending, fading = engine._chunkFade;
-	const waiting = pending && pending.size, developing = fading && fading.size;
-	if (!waiting && !developing) return;
+	if (!engine.world || !engine.world.infinite) return;
+	const fading = engine._chunkFade;
+	const missing = missingChunkRects(engine);
+	if (!missing.length && !(fading && fading.size)) return;
 	const stamp = Date.now();
 	ctx.save();
-	if (waiting) {
-		// A chunk still on the wire shows either the blurred overview or, when
-		// there is none, the world-anchored unloaded pattern.
-		const bare = [];
-		for (const key of pending) {
-			const rect = chunkRect(engine, key);
-			if (!rect) continue;
-			if (!drawPreview(ctx, engine, rect)) bare.push(rect);
-		}
-		if (bare.length) fillUnloaded(ctx, engine, bare);
-	}
-	// Arrived content develops out of its placeholder: the veil is painted in
-	// the world background so pixels emerge instead of popping in.
-	if (developing) {
-		const veil = engine.world?.background || '#ffffff';
+	// Not here yet — world-anchored texture, held until the chunk arrives.
+	if (missing.length) fillUnloaded(ctx, engine, missing);
+	// Arrived content develops out of the placeholder: the veil is painted in
+	// the world background so pixels emerge instead of popping in, with the
+	// coarse minimap overview lingering underneath so the art sharpens.
+	if (fading && fading.size) {
+		const veil = engine.world.background || '#ffffff';
 		for (const [key, at] of fading) {
 			const rect = chunkRect(engine, key);
 			if (!rect) continue;
@@ -136,9 +148,7 @@ function drawChunkLoading(ctx, engine) {
 			ctx.globalAlpha = alpha;
 			ctx.fillStyle = veil;
 			ctx.fillRect(rect.x, rect.y, rect.span, rect.span);
-			// The blurred preview lingers underneath for a moment, so the crisp
-			// pixels appear to sharpen rather than replace the placeholder.
-			if (alpha > 0.15) { ctx.globalAlpha = alpha * 0.6; drawPreview(ctx, engine, rect); }
+			if (alpha > 0.15) { ctx.globalAlpha = alpha * PREVIEW_ALPHA; drawPreview(ctx, engine, rect); }
 		}
 		ctx.globalAlpha = 1;
 	}
